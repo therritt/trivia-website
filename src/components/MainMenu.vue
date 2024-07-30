@@ -1,12 +1,16 @@
 <template>
     <div class="main-menu">
-      <h1>Trivia Duel</h1>
-      <button @click="goToCreateRoom">Create Room</button>
-      <button @click="joinRoom">Join Room</button>
+        <header>
+            <h1>Trivia Duel</h1>
+        </header>
+        <div class="button-container">
+          <button class="create-button" @click="goToCreateRoom">Create Room</button>
+          <button class="join-button" @click="joinRoom">Join Room</button>
+        </div>
     </div>
-  </template>
+</template>
   
-  <script>
+<script>
   import { ref } from 'vue';
   import { useRouter } from 'vue-router';
   
@@ -30,25 +34,64 @@
       };
     },
   };
-  </script>
+</script>
   
-  <style scoped>
+<style scoped>
   .main-menu {
     text-align: center;
-  }
-  h1 {
-    color: rgb(220, 18, 75);
-    font-family: Brush Script MT, Brush Script Std, cursive;
-  }
-  button {
-    margin: 10px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-around;
+    align-content: center;
+    height: 90vh;
+    width: 100%;
   }
 
-  @media (min-width: 1024px) {
+  .button-container {
+    display: flex;
+    gap: 0px 1rem;
+    justify-content: space-around;
+    align-self: center;
+    height: 4rem;
+    width: 80%;
+  }
+
+  .create-button {
+    background-color: var(--trivia-red);
+  }
+
+  .join-button {
+    background-color: var(--trivia-cyan);
+  }
+
+  h1 {
+    color: var(--trivia-red);
+    -webkit-text-stroke: 1px var(--trivia-cyan);
+    
+    font-family: Brush Script MT, Brush Script Std, cursive;
+    font-size: 15vw;
+  }
+
+  button {
+    margin: auto;
+    width: 40%;
+    height: 100%;
+    font-size: 2rem;
+  }
+
+  @media (max-width: 1024px) {
     h1 {
-        -webkit-text-stroke: 1px rgb(185, 255, 255);
-        font-size: 10vw;
+        font-size: 20vw;
+    }
+
+    .button-container {
+        width: 100%;
+    }
+
+    button {
+        width: 50%;
+        font-size: 1.5rem;
     }
   }
-  </style>
+</style>
   

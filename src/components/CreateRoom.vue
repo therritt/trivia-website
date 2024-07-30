@@ -32,9 +32,10 @@
   };
   </script>
   
-  <style>
+  <style scoped>
   .create-room {
     text-align: center;
+    width: 100%;
   }
   input {
     margin: 10px;

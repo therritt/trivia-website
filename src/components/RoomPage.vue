@@ -25,6 +25,7 @@
   <style>
   .room-page {
     text-align: center;
+    width: 100%;
   }
   </style>
   

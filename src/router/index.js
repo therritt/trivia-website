@@ -1,7 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import MainMenu from '../components/MainMenu.vue';
-import CreateRoom from '../components/CreateRoom.vue';
-import RoomPage from '../components/RoomPage.vue';
+import MainMenu from '../components/MainMenu.vue'
+import CreateRoom from '../components/CreateRoom.vue'
+import RoomPage from '../components/RoomPage.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),

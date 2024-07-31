@@ -37,8 +37,14 @@
       const currentQuestion = ref(defaultQuestion)
 
       const startGame = () => {
-        currentQuestion.value.text = 'What framework is this frontend built with?'
-        currentQuestion.value.answers = ['Vue.js', 'Bootstrap', 'React', 'Angular']
+        currentQuestion.value.text =
+          'In the alternate timeline in Mortal Kombat, which character was the one to slaughter the Shirai Ryu clan?? In the alternate timeline in Mortal Kombat, which character was the one to slaughter the Shirai Ryu clan??'
+        currentQuestion.value.answers = [
+          'Vue.js',
+          'Bootstrap super long string Bootstrap super long string',
+          'React',
+          'Angular'
+        ]
         isGameStarted.value = true
       }
 
@@ -75,7 +81,7 @@
   header {
     display: flex;
     justify-content: space-between;
-    padding: 1rem;
+    padding: 0.5rem 1rem;
     background-color: var(--color-background);
   }
 
@@ -87,9 +93,20 @@
     display: flex;
   }
 
+  .room-code-container h2 {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+
   .room-code {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+
     width: fit-content;
-    margin: 0 0.5rem;
+    margin: 0.25rem;
+    padding: 0 0.25rem;
     border-radius: 5px;
     border: 2px solid var(--color-border);
     background-color: var(--vt-c-white-mute);

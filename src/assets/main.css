@@ -4,9 +4,17 @@
   width: 100vw;
   height: 100vh;
 
+  display: grid;
+  grid-template-columns: 1fr;
+
   margin: 0 auto;
 
   font-weight: normal;
+}
+
+body {
+  display: flex;
+  place-items: center;
 }
 
 a,
@@ -39,17 +47,7 @@ button {
 }
 
 @media (min-width: 1024px) {
-  body {
-    display: flex;
-    place-items: center;
-  }
-
   .logo {
     font-size: 15vw;
-  }
-
-  #app {
-    display: grid;
-    grid-template-columns: 1fr;
   }
 }

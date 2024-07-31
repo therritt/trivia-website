@@ -42,13 +42,44 @@
     flex-direction: column;
     align-items: center;
     margin-top: 2rem;
+    width: 100%;
+    height: 100%;
   }
 
   .question-container {
-    margin-bottom: 1rem;
+    flex: 1;
+
+    max-width: 70%;
+    width: fit-content;
+
+    place-content: center;
+    text-align: center;
+    font-size: 2vw;
+  }
+
+  .answers-container {
+    flex: 2;
+    display: flex;
+    flex-wrap: wrap;
+    place-content: space-around;
   }
 
   .answers-container button {
+    flex: 1 1 45%;
     margin: 0.5rem;
+    text-overflow: clip;
+    font-size: 3vw;
+
+    min-height: 40%;
+  }
+
+  @media (max-width: 768px) {
+    .question-container {
+      font-size: 3.5vw;
+    }
+
+    .answers-container button {
+      font-size: 5vw;
+    }
   }
 </style>

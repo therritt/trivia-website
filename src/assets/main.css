@@ -5,7 +5,6 @@
   height: 100vh;
 
   margin: 0 auto;
-  padding: 2rem;
 
   font-weight: normal;
 }
@@ -16,6 +15,21 @@ a,
   color: hsla(160, 100%, 37%, 1);
   transition: 0.4s;
   padding: 3px;
+}
+
+.logo {
+  color: var(--trivia-red);
+  -webkit-text-stroke: 1px var(--trivia-cyan);
+
+  font-family:
+    Brush Script MT,
+    Brush Script Std,
+    cursive;
+  font-size: 20vw;
+}
+
+button {
+  cursor: pointer;
 }
 
 @media (hover: hover) {
@@ -30,9 +44,12 @@ a,
     place-items: center;
   }
 
+  .logo {
+    font-size: 15vw;
+  }
+
   #app {
     display: grid;
     grid-template-columns: 1fr;
-    padding: 0 2rem;
   }
 }

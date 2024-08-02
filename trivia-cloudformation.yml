@@ -1,0 +1,163 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS CloudFormation template to deploy trivia game backend websocket api with respective integrations
+
+Resources:
+  # Lambda Functions
+  TriviaConnect:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt LabRole.Arn
+      Code:
+        ZipFile: |
+          export const handler = async (event) => {
+            const response = {
+              statusCode: 200,
+              body: JSON.stringify('Websocket connected.'),
+            };
+            return response;
+          };
+      Runtime: nodejs20.x
+      Timeout: 3
+      MemorySize: 128
+
+  TriviaDisconnect:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt LabRole.Arn
+      Code:
+        ZipFile: |
+          export const handler = async (event) => {
+            const response = {
+              statusCode: 200,
+              body: JSON.stringify('Hello from Lambda!'),
+            };
+            return response;
+          };
+      Runtime: nodejs20.x
+      Timeout: 3
+      MemorySize: 128
+
+  TriviaStartGame:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt LabRole.Arn
+      Code:
+        ZipFile: |
+          import { ApiGatewayManagementApiClient, PostToConnectionCommand} from "@aws-sdk/client-apigatewaymanagementapi";
+          const client = new ApiGatewayManagementApiClient({ endpoint: CONNECTION_URL });
+            
+          export const handler = async (event) => {
+            const connectionId = event.requestContext.connectionId;
+            const message = new PostToConnectionCommand({ ConnectionId: connectionId, Data: "Game started" });
+            await client.send(message);
+
+            const response = { statusCode: 200 };
+            return response;
+          };
+      Runtime: nodejs20.x
+      Timeout: 3
+      MemorySize: 128
+
+  TriviaSubmitAnswer:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt LabRole.Arn
+      Code:
+        ZipFile: |
+          export const handler = async (event) => {
+            const response = {
+              statusCode: 200,
+              body: JSON.stringify('Hello from Lambda!'),
+            };
+            return response;
+          };
+      Runtime: nodejs20.x
+      Timeout: 3
+      MemorySize: 128
+
+  # WebSocket API
+  WebSocketApi:
+    Type: 'AWS::ApiGatewayV2::Api'
+    Properties:
+      Name: TriviaWebsocketApi
+      ProtocolType: WEBSOCKET
+      RouteSelectionExpression: '$request.body.action'
+
+  # Stages
+  ApiStage:
+    Type: 'AWS::ApiGatewayV2::Stage'
+    Properties:
+      ApiId: !Ref WebSocketApi
+      StageName: production
+      AutoDeploy: true
+
+  # WebSocket Routes
+  ConnectRoute:
+    Type: 'AWS::ApiGatewayV2::Route'
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: '$connect'
+      Target: !Sub 'integrations/${ConnectIntegration}'
+
+  DisconnectRoute:
+    Type: 'AWS::ApiGatewayV2::Route'
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: '$disconnect'
+      Target: !Sub 'integrations/${DisconnectIntegration}'
+
+  StartGameRoute:
+    Type: 'AWS::ApiGatewayV2::Route'
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: 'startGame'
+      Target: !Sub 'integrations/${StartGameIntegration}'
+
+  SubmitAnswerRoute:
+    Type: 'AWS::ApiGatewayV2::Route'
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: 'submitAnswer'
+      Target: !Sub 'integrations/${SubmitAnswerIntegration}'
+
+  # Integrations
+  ConnectIntegration:
+    Type: 'AWS::ApiGatewayV2::Integration'
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:TriviaConnect'
+      PayloadFormatVersion: '2.0'
+
+  DisconnectIntegration:
+    Type: 'AWS::ApiGatewayV2::Integration'
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:TriviaDisconnect'
+      PayloadFormatVersion: '2.0'
+
+  StartGameIntegration:
+    Type: 'AWS::ApiGatewayV2::Integration'
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:TriviaStartGame'
+      PayloadFormatVersion: '2.0'
+
+  SubmitAnswerIntegration:
+    Type: 'AWS::ApiGatewayV2::Integration'
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:TriviaSubmitAnswer'
+      PayloadFormatVersion: '2.0'
+
+Outputs:
+  WebSocketApiUrl:
+    Description: "The URL of the WebSocket API"
+    Value: !Sub 'wss://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/production'

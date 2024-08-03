@@ -7,10 +7,11 @@ Resources:
     Type: 'AWS::Lambda::Function'
     Properties:
       Handler: index.handler
-      Role: !GetAtt LabRole.Arn
+      FunctionName: 'TriviaConnect'
+      Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
       Code:
         ZipFile: |
-          export const handler = async (event) => {
+          exports.handler = async (event) => {
             const response = {
               statusCode: 200,
               body: JSON.stringify('Websocket connected.'),
@@ -25,10 +26,11 @@ Resources:
     Type: 'AWS::Lambda::Function'
     Properties:
       Handler: index.handler
-      Role: !GetAtt LabRole.Arn
+      FunctionName: 'TriviaDisconnect'
+      Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
       Code:
         ZipFile: |
-          export const handler = async (event) => {
+          exports.handler = async (event) => {
             const response = {
               statusCode: 200,
               body: JSON.stringify('Hello from Lambda!'),
@@ -43,13 +45,14 @@ Resources:
     Type: 'AWS::Lambda::Function'
     Properties:
       Handler: index.handler
-      Role: !GetAtt LabRole.Arn
+      FunctionName: 'TriviaStartGame'
+      Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
       Code:
         ZipFile: |
-          import { ApiGatewayManagementApiClient, PostToConnectionCommand} from "@aws-sdk/client-apigatewaymanagementapi";
-          const client = new ApiGatewayManagementApiClient({ endpoint: CONNECTION_URL });
+          const { ApiGatewayManagementApiClient, PostToConnectionCommand} = require("@aws-sdk/client-apigatewaymanagementapi");
+          const client = new ApiGatewayManagementApiClient({ endpoint: process.env.CONNECTION_URL });
             
-          export const handler = async (event) => {
+          exports.handler = async (event) => {
             const connectionId = event.requestContext.connectionId;
             const message = new PostToConnectionCommand({ ConnectionId: connectionId, Data: "Game started" });
             await client.send(message);
@@ -60,15 +63,19 @@ Resources:
       Runtime: nodejs20.x
       Timeout: 3
       MemorySize: 128
+      Environment:
+        Variables:
+          CONNECTION_URL: !Sub 'https://${TriviaWebsocketApi}.execute-api.${AWS::Region}.amazonaws.com/production'
 
   TriviaSubmitAnswer:
     Type: 'AWS::Lambda::Function'
     Properties:
       Handler: index.handler
-      Role: !GetAtt LabRole.Arn
+      FunctionName: 'TriviaSubmitAnswer'
+      Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
       Code:
         ZipFile: |
-          export const handler = async (event) => {
+          exports.handler = async (event) => {
             const response = {
               statusCode: 200,
               body: JSON.stringify('Hello from Lambda!'),
@@ -79,85 +86,144 @@ Resources:
       Timeout: 3
       MemorySize: 128
 
-  # WebSocket API
-  WebSocketApi:
+  # Lambda Invocation Permissions
+  ConnectPermission:
+    Type: AWS::Lambda::Permission
+    DependsOn:
+      - TriviaWebsocketApi
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref TriviaConnect
+      Principal: apigateway.amazonaws.com
+
+  DisconnectPermission:
+    Type: AWS::Lambda::Permission
+    DependsOn:
+      - TriviaWebsocketApi
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref TriviaDisconnect
+      Principal: apigateway.amazonaws.com
+
+  StartGamePermission:
+    Type: AWS::Lambda::Permission
+    DependsOn:
+      - TriviaWebsocketApi
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref TriviaStartGame
+      Principal: apigateway.amazonaws.com
+
+  SubmitAnswerPermission:
+    Type: AWS::Lambda::Permission
+    DependsOn:
+      - TriviaWebsocketApi
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref TriviaSubmitAnswer
+      Principal: apigateway.amazonaws.com
+
+  # Trivia WebSocket API
+  TriviaWebsocketApi:
     Type: 'AWS::ApiGatewayV2::Api'
     Properties:
       Name: TriviaWebsocketApi
       ProtocolType: WEBSOCKET
       RouteSelectionExpression: '$request.body.action'
 
+  # Deployment
+  Deployment:
+    Type: AWS::ApiGatewayV2::Deployment
+    DependsOn:
+      - ConnectRoute
+      - DisconnectRoute
+      - StartGameRoute
+      - SubmitAnswerRoute
+    Properties:
+      ApiId: !Ref TriviaWebsocketApi
+
   # Stages
   ApiStage:
     Type: 'AWS::ApiGatewayV2::Stage'
     Properties:
-      ApiId: !Ref WebSocketApi
+      ApiId: !Ref TriviaWebsocketApi
       StageName: production
-      AutoDeploy: true
+      DeploymentId: !Ref Deployment
 
   # WebSocket Routes
   ConnectRoute:
     Type: 'AWS::ApiGatewayV2::Route'
     Properties:
-      ApiId: !Ref WebSocketApi
+      ApiId: !Ref TriviaWebsocketApi
       RouteKey: '$connect'
-      Target: !Sub 'integrations/${ConnectIntegration}'
+      AuthorizationType: NONE
+      Target: !Join
+        - '/'
+        -
+          - 'integrations'
+          - !Ref ConnectIntegration
 
   DisconnectRoute:
     Type: 'AWS::ApiGatewayV2::Route'
     Properties:
-      ApiId: !Ref WebSocketApi
+      ApiId: !Ref TriviaWebsocketApi
       RouteKey: '$disconnect'
-      Target: !Sub 'integrations/${DisconnectIntegration}'
+      AuthorizationType: NONE
+      Target: !Join
+        - '/'
+        -
+          - 'integrations'
+          - !Ref DisconnectIntegration
 
   StartGameRoute:
     Type: 'AWS::ApiGatewayV2::Route'
     Properties:
-      ApiId: !Ref WebSocketApi
+      ApiId: !Ref TriviaWebsocketApi
       RouteKey: 'startGame'
-      Target: !Sub 'integrations/${StartGameIntegration}'
+      AuthorizationType: NONE
+      Target: !Join
+        - '/'
+        -
+          - 'integrations'
+          - !Ref StartGameIntegration
 
   SubmitAnswerRoute:
     Type: 'AWS::ApiGatewayV2::Route'
     Properties:
-      ApiId: !Ref WebSocketApi
+      ApiId: !Ref TriviaWebsocketApi
       RouteKey: 'submitAnswer'
-      Target: !Sub 'integrations/${SubmitAnswerIntegration}'
+      AuthorizationType: NONE
+      Target: !Join
+        - '/'
+        - 
+          - 'integrations'
+          - !Ref SubmitAnswerIntegration
 
   # Integrations
   ConnectIntegration:
     Type: 'AWS::ApiGatewayV2::Integration'
     Properties:
-      ApiId: !Ref WebSocketApi
+      ApiId: !Ref TriviaWebsocketApi
       IntegrationType: AWS_PROXY
-      IntegrationUri: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:TriviaConnect'
-      PayloadFormatVersion: '2.0'
+      IntegrationUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${TriviaConnect.Arn}/invocations'
 
   DisconnectIntegration:
     Type: 'AWS::ApiGatewayV2::Integration'
     Properties:
-      ApiId: !Ref WebSocketApi
+      ApiId: !Ref TriviaWebsocketApi
       IntegrationType: AWS_PROXY
-      IntegrationUri: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:TriviaDisconnect'
-      PayloadFormatVersion: '2.0'
+      IntegrationUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${TriviaDisconnect.Arn}/invocations'
 
   StartGameIntegration:
     Type: 'AWS::ApiGatewayV2::Integration'
     Properties:
-      ApiId: !Ref WebSocketApi
+      ApiId: !Ref TriviaWebsocketApi
       IntegrationType: AWS_PROXY
-      IntegrationUri: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:TriviaStartGame'
-      PayloadFormatVersion: '2.0'
+      IntegrationUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${TriviaStartGame.Arn}/invocations'
 
   SubmitAnswerIntegration:
     Type: 'AWS::ApiGatewayV2::Integration'
     Properties:
-      ApiId: !Ref WebSocketApi
+      ApiId: !Ref TriviaWebsocketApi
       IntegrationType: AWS_PROXY
-      IntegrationUri: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:TriviaSubmitAnswer'
-      PayloadFormatVersion: '2.0'
-
-Outputs:
-  WebSocketApiUrl:
-    Description: "The URL of the WebSocket API"
-    Value: !Sub 'wss://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/production'
+      IntegrationUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${TriviaSubmitAnswer.Arn}/invocations'

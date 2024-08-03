@@ -2,6 +2,106 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: AWS CloudFormation template to deploy trivia game backend websocket api with respective integrations
 
 Resources:
+  # VPC
+  CacheVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 11.0.0.0/16
+      Tags:
+        - Key: Name
+          Value: CacheVPC
+
+  # Lambda (Public) Subnet
+  LambdaSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref CacheVPC
+      CidrBlock: 11.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: LambdaSubnet
+
+  # Cache (Private) Subnet
+  CacheSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref CacheVPC
+      CidrBlock: 11.0.2.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: CacheSubnet
+
+  # Internet Gateway
+  CacheVpcInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: CacheVpcInternetGateway
+
+  # Internet Gateway Attachment
+  CacheVPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref CacheVPC
+      InternetGatewayId: !Ref CacheVpcInternetGateway
+
+  # Route Table for Lambda (Public) Subnet
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref CacheVPC
+
+  # Route to Internet Gateway
+  InternetRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref CacheVpcInternetGateway
+
+  # Lambda Subnet -> Route Table Association
+  LambdaSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref LambdaSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # Security Group for Redis Cache, allows access from lambdas
+  RedisAccessSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow access to ElastiCache from Lambda subnet
+      VpcId: !Ref CacheVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          CidrIp: 11.0.1.0/24  # Public subnet CIDR
+
+  # ElastiCache Redis Cluster (one node)
+  RedisCluster:
+    Type: AWS::ElastiCache::CacheCluster
+    Properties:
+      CacheNodeType: cache.t4g.micro
+      Engine: redis
+      NumCacheNodes: 1
+      CacheSubnetGroupName: !Ref RedisSubnetGroup
+      VpcSecurityGroupIds:
+        - !Ref RedisAccessSecurityGroup
+
+  # Cache Subnet Group
+  RedisSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      CacheSubnetGroupName: RedisSubnetGroup
+      SubnetIds:
+        - !Ref CacheSubnet
+      Description: Subnet group for ElastiCache Redis
+
   # Lambda Functions
   TriviaConnect:
     Type: 'AWS::Lambda::Function'
@@ -40,6 +140,9 @@ Resources:
       Runtime: nodejs20.x
       Timeout: 3
       MemorySize: 128
+      Environment:
+        Variables:
+          REDIS_ENDPOINT: !Sub "${RedisCluster.RedisEndpoint.Address}:${RedisCluster.RedisEndpoint.Port}"
 
   TriviaStartGame:
     Type: 'AWS::Lambda::Function'

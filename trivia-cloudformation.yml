@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: AWS CloudFormation template to deploy trivia game backend websocket api with respective integrations
+Description: Trivia game backend websocket api with respective integrations
 
 Resources:
   # VPC
@@ -70,6 +70,18 @@ Resources:
       SubnetId: !Ref LambdaSubnet
       RouteTableId: !Ref PublicRouteTable
 
+  # Security Group for lambdas to interact w/ redis cluster
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Lambda function in public subnet
+      VpcId: !Ref CacheVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+
   # Security Group for Redis Cache, allows access from lambdas
   RedisAccessSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -80,7 +92,7 @@ Resources:
         - IpProtocol: tcp
           FromPort: 6379
           ToPort: 6379
-          CidrIp: 11.0.1.0/24  # Public subnet CIDR
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
 
   # ElastiCache Redis Cluster (one node)
   RedisCluster:
@@ -122,6 +134,175 @@ Resources:
       Timeout: 3
       MemorySize: 128
 
+  TriviaJoinRoom:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.handler
+      FunctionName: 'TriviaJoinRoom'
+      Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+      Code:
+        ZipFile: |
+          const redis = require('/opt/node_modules/redis');
+
+          // Create a Redis client
+          const client = redis.createClient({
+            host: process.env.REDIS_ENDPOINT,
+            port: process.env.REDIS_PORT
+          });
+
+          // Lambda handler function
+          exports.handler = async (event) => {
+            const { userId, roomId } = JSON.parse(event.body);
+
+            // Check if room exists
+            client.exists(`room:${roomId}`, (err, exists) => {
+              if (err) {
+                console.error('Error checking room existence:', err);
+                return {
+                  statusCode: 500,
+                  body: JSON.stringify({ message: 'Error checking room existence' })
+                };
+              }
+
+              if (exists === 1) {
+                // Room exists, proceed to add user
+                const userData = { correctAnswers: 0 };
+                const roomKey = `room:${roomId}`;
+                const userKey = `user:${userId}`;
+
+                // Use a multi/exec transaction for atomicity
+                client.multi()
+                  .hset(roomKey, userId, JSON.stringify(userData))
+                  .hset('userRooms', userId, roomId)
+                  .expire(roomKey, 1800)
+                  .expire(userKey, 1800)
+                  .exec((err, replies) => {
+                    if (err) {
+                      console.error('Error adding user to room:', err);
+                      return {
+                        statusCode: 500,
+                        body: JSON.stringify({ message: 'Failed to add user to room' })
+                      };
+                    } else {
+                      console.log(`User ${userId} added to room ${roomId}`);
+                      return {
+                        statusCode: 200,
+                        body: JSON.stringify({ message: 'User added to room successfully' })
+                      };
+                    }
+                  });
+              } else {
+                // Room does not exist
+                console.log(`Room ${roomId} does not exist`);
+                return {
+                  statusCode: 404,
+                  body: JSON.stringify({ message: `Room ${roomId} does not exist` })
+                };
+              }
+            });
+          };
+      Runtime: nodejs20.x
+      Timeout: 3
+      MemorySize: 128
+      Environment:
+        Variables:
+          REDIS_ENDPOINT: !Sub "${RedisCluster.RedisEndpoint.Address}"
+          REDIS_PORT: !Sub "${RedisCluster.RedisEndpoint.Port}"
+      VpcConfig:
+        SubnetIds:
+          - !Ref LambdaSubnet
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+
+  TriviaCreateRoom:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.handler
+      FunctionName: 'TriviaCreateRoom'
+      Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+      Code:
+        ZipFile: |
+          const redis = require('/opt/node_modules/redis');
+          const crypto = require('crypto');
+
+          // Create a Redis client
+          const client = redis.createClient({
+            host: process.env.REDIS_ENDPOINT,
+            port: process.env.REDIS_PORT
+          });
+
+          // Lambda handler function
+          exports.handler = async (event) => {
+            try {
+              const roomCode = crypto.randomBytes(4).toString('hex').toUpperCase();
+
+              // Check if the room code already exists in Redis
+              client.exists(`room:${roomCode}`, async (err, exists) => {
+                if (err) {
+                  console.error('Error checking room existence:', err);
+                  return {
+                    statusCode: 500,
+                    body: JSON.stringify({ message: 'Error checking room existence' })
+                  };
+                }
+
+                if (exists === 1) {
+                  // Room code already exists, generate a new one
+                  return {
+                    statusCode: 500,
+                    body: JSON.stringify({ message: 'Room code already exists' })
+                  };
+                } else {
+                  // Room code is unique, proceed to create the room
+                  const userId = JSON.parse(event.body).userId;
+                  const userData = { correctAnswers: 0, host: true };
+                  const roomKey = `room:${roomCode}`;
+                  const userKey = `user:${userId}`;
+
+                  // Use a multi/exec transaction for atomicity
+                  client.multi()
+                    .hset(roomKey, userId, JSON.stringify(userData))
+                    .hset('userRooms', userId, roomCode)
+                    .expire(roomKey, 1800)
+                    .expire(userKey, 1800)
+                    .exec((err, replies) => {
+                      if (err) {
+                        console.error('Error creating room:', err);
+                        return {
+                          statusCode: 500,
+                          body: JSON.stringify({ message: 'Failed to create room' })
+                        };
+                      } else {
+                        console.log(`Room ${roomCode} created with host ${userId}`);
+                        return {
+                          statusCode: 200,
+                          body: JSON.stringify({ message: `Room ${roomCode} created successfully` })
+                        };
+                      }
+                    });
+                }
+              });
+            } catch (error) {
+              console.error('Error generating room code:', error);
+              return {
+                statusCode: 500,
+                body: JSON.stringify({ message: 'Error generating room code' })
+              };
+            }
+          };
+      Runtime: nodejs20.x
+      Timeout: 3
+      MemorySize: 128
+      Environment:
+        Variables:
+          REDIS_ENDPOINT: !Sub "${RedisCluster.RedisEndpoint.Address}"
+          REDIS_PORT: !Sub "${RedisCluster.RedisEndpoint.Port}"
+      VpcConfig:
+        SubnetIds:
+          - !Ref LambdaSubnet
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+
   TriviaDisconnect:
     Type: 'AWS::Lambda::Function'
     Properties:
@@ -142,7 +323,13 @@ Resources:
       MemorySize: 128
       Environment:
         Variables:
-          REDIS_ENDPOINT: !Sub "${RedisCluster.RedisEndpoint.Address}:${RedisCluster.RedisEndpoint.Port}"
+          REDIS_ENDPOINT: !Sub "${RedisCluster.RedisEndpoint.Address}"
+          REDIS_PORT: !Sub "${RedisCluster.RedisEndpoint.Port}"
+      VpcConfig:
+        SubnetIds:
+          - !Ref LambdaSubnet
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
 
   TriviaStartGame:
     Type: 'AWS::Lambda::Function'

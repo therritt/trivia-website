@@ -8,24 +8,27 @@
 
 <script>
   import { ref } from 'vue'
-  import { useRouter } from 'vue-router'
+  import { useRouter, useRoute } from 'vue-router'
 
   export default {
     name: 'CreateRoom',
     setup() {
       const roomCode = ref('')
       const router = useRouter()
+      const route = useRoute()
+      const username = route.query.username || 'Guest'
 
       const createRoom = () => {
         // API Placeholder
         if (roomCode.value) {
-          router.push(`/room/${roomCode.value}`)
+          router.push({path: `/room/${roomCode.value}`})
         }
       }
 
       return {
         roomCode,
-        createRoom
+        createRoom,
+        username
       }
     }
   }

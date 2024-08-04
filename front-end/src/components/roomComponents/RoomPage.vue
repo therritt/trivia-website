@@ -11,8 +11,9 @@
     </header>
 
     <!-- Conditionally render components based on game state -->
-    <RoomSetup v-if="!isGameStarted" :onStart="startGame" />
-    <TriviaQuestion v-else :question="currentQuestion" :onAnswer="submitAnswer" />
+    <RoomSetup v-if="!isGameStarted && !showLeaderboard" :onStart="startGame" />
+    <TriviaQuestion v-if="isGameStarted && !showLeaderboard" :question="currentQuestion" :onAnswer="submitAnswer" />
+    <Leaderboard v-if="showLeaderboard" :players="playerList" />
   </div>
 </template>
 
@@ -21,20 +22,24 @@
   import { useRoute } from 'vue-router'
   import RoomSetup from './RoomSetup.vue'
   import TriviaQuestion from './TriviaQuestion.vue'
+  import Leaderboard from './Leaderboard.vue';
 
   export default {
     name: 'RoomPage',
     components: {
       RoomSetup,
-      TriviaQuestion
+      TriviaQuestion,
+      Leaderboard
     },
     setup() {
       const route = useRoute()
       const roomCode = computed(() => route.params.roomCode)
 
       const isGameStarted = ref(false)
+      const showLeaderboard = ref(false)
       const defaultQuestion = { text: '', answers: [] }
       const currentQuestion = ref(defaultQuestion)
+      const playerList = ref([])
 
       const startGame = () => {
         currentQuestion.value.text =
@@ -55,7 +60,12 @@
       const submitAnswer = (answer) => {
         if (checkAnswer(answer)) {
           currentQuestion.value = defaultQuestion
-          isGameStarted.value = false
+          playerList.value = [
+            { name: 'Alice', points: 1200 },
+            { name: 'Bob', points: 1500 },
+            { name: 'Charlie', points: 800 }
+          ];
+          showLeaderboard.value = true
         }
       }
 
@@ -64,7 +74,9 @@
         isGameStarted,
         currentQuestion,
         startGame,
-        submitAnswer
+        submitAnswer,
+        showLeaderboard,
+        playerList
       }
     }
   }

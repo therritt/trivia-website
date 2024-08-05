@@ -114,6 +114,96 @@ Resources:
         - !Ref CacheSubnet
       Description: Subnet group for ElastiCache Redis
 
+  # Step functions
+  RoomStepFunction:
+    Type: 'AWS::StepFunctions::StateMachine'
+    Properties:
+      DefinitionString: !Sub |
+        {
+          "Comment": "Handles room creation and joining",
+          "StartAt": "Check RoomID",
+          "States": {
+            "Check RoomID": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.roomId",
+                  "IsPresent": true,
+                  "Next": "Join Room"
+                }
+              ],
+              "Default": "Create Room"
+            },
+            "Join Room": {
+              "Type": "Task",
+              "Resource": "${TriviaJoinRoom.Arn}",
+              "OutputPath": "$.Payload",
+              "Parameters": {
+                "Payload.$": "$"
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "Next": "Send Web Socket Message"
+            },
+            "Create Room": {
+              "Type": "Task",
+              "Resource": "${TriviaCreateRoom.Arn}",
+              "OutputPath": "$.Payload",
+              "Parameters": {
+                "Payload.$": "$"
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "Next": "Send Web Socket Message"
+            },
+            "Send Web Socket Message": {
+              "Type": "Task",
+              "Resource": "${TriviaSendMessage.Arn}",
+              "OutputPath": "$.Payload",
+              "Parameters": {
+                "Payload.$": "$"
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "End": true
+            }
+          }
+        }
+      RoleArn: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+
   # Lambda Functions
   TriviaConnect:
     Type: 'AWS::Lambda::Function'
@@ -123,15 +213,29 @@ Resources:
       Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
       Code:
         ZipFile: |
+          const { SFNClient, StartExecutionCommand } = require("@aws-sdk/client-sfn");
+
           exports.handler = async (event) => {
-            const response = {
-              statusCode: 200,
-              body: JSON.stringify('Websocket connected.'),
+            const client = new SFNClient();
+
+            const input = JSON.stringify({
+              userId: event.requestContext.connectionId,
+              username: event.queryStringParameters.username || 'Guest',
+              roomId: event.queryStringParameters.roomId || undefined
+            });
+
+            const params = {
+              stateMachineArn: process.env.SFN_ARN,
+              input: input
             };
-            return response;
-          };
+
+            const command = new StartExecutionCommand(params);
+            await client.send(command);
+
+            return {statusCode: 200}
+          }
       Runtime: nodejs20.x
-      Timeout: 3
+      Timeout: 5
       MemorySize: 128
 
   TriviaJoinRoom:
@@ -152,58 +256,57 @@ Resources:
 
           // Lambda handler function
           exports.handler = async (event) => {
-            const { userId, roomId } = JSON.parse(event.body);
+            const userId = event.userId;
+            const roomCode = event.roomId;
+            const userErrorMessage = {
+              messageType: "UserError",
+              userId: userId
+            };
+            const roomStatusMessage = {
+              messageType: "RoomStatus",
+              roomId: roomCode
+            };
 
-            // Check if room exists
-            client.exists(`room:${roomId}`, (err, exists) => {
-              if (err) {
-                console.error('Error checking room existence:', err);
-                return {
-                  statusCode: 500,
-                  body: JSON.stringify({ message: 'Error checking room existence' })
-                };
+            try {
+              await client.connect();
+
+              const exists = await client.exists(`room:${roomCode}`);
+              if (exists === 0) {
+                // Room code already exists
+                console.error('Room does not exist');
+                return userErrorMessage;
               }
 
-              if (exists === 1) {
-                // Room exists, proceed to add user
-                const userData = { correctAnswers: 0 };
-                const roomKey = `room:${roomId}`;
-                const userKey = `user:${userId}`;
+              const userData = { correctAnswers: 0, username: event.username};
+              const roomKey = `room:${roomCode}`;
 
-                // Use a multi/exec transaction for atomicity
-                client.multi()
-                  .hset(roomKey, userId, JSON.stringify(userData))
-                  .hset('userRooms', userId, roomId)
-                  .expire(roomKey, 1800)
-                  .expire(userKey, 1800)
-                  .exec((err, replies) => {
-                    if (err) {
-                      console.error('Error adding user to room:', err);
-                      return {
-                        statusCode: 500,
-                        body: JSON.stringify({ message: 'Failed to add user to room' })
-                      };
-                    } else {
-                      console.log(`User ${userId} added to room ${roomId}`);
-                      return {
-                        statusCode: 200,
-                        body: JSON.stringify({ message: 'User added to room successfully' })
-                      };
-                    }
-                  });
-              } else {
-                // Room does not exist
-                console.log(`Room ${roomId} does not exist`);
-                return {
-                  statusCode: 404,
-                  body: JSON.stringify({ message: `Room ${roomId} does not exist` })
-                };
-              }
-            });
+              await client.multi()
+                .hSet(roomKey, userId, JSON.stringify(userData))
+                .set(userId, roomCode)
+                .expire(roomKey, 1800)
+                .expire(userId, 1800)
+                .exec();
+
+              return {
+                statusCode: 200,
+                body: JSON.stringify(roomStatusMessage)
+              };
+
+            } catch (error) {
+              console.error('Error generating room code:', error);
+              return {
+                statusCode: 500,
+                body: userErrorMessage
+              };
+            } finally {
+              await client.quit();
+            }
           };
       Runtime: nodejs20.x
-      Timeout: 3
+      Timeout: 10
       MemorySize: 128
+      Layers:
+        - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:redisLayer:1
       Environment:
         Variables:
           REDIS_ENDPOINT: !Sub "${RedisCluster.RedisEndpoint.Address}"
@@ -233,66 +336,58 @@ Resources:
 
           // Lambda handler function
           exports.handler = async (event) => {
+            const userId = event.userId;
+            const userErrorMessage = {
+              messageType: "UserError",
+              userId: userId
+            };
+            
             try {
+              await client.connect();
+
               const roomCode = crypto.randomBytes(4).toString('hex').toUpperCase();
+              const exists = await client.exists(`room:${roomCode}`);
+              if (exists === 1) {
+                // Room code already exists
+                console.error('Room code already exists');
+                return userErrorMessage;
+              }
 
-              // Check if the room code already exists in Redis
-              client.exists(`room:${roomCode}`, async (err, exists) => {
-                if (err) {
-                  console.error('Error checking room existence:', err);
-                  return {
-                    statusCode: 500,
-                    body: JSON.stringify({ message: 'Error checking room existence' })
-                  };
-                }
+              const userData = { correctAnswers: 0, username: event.username};
+              const roomKey = `room:${roomCode}`;
 
-                if (exists === 1) {
-                  // Room code already exists, generate a new one
-                  return {
-                    statusCode: 500,
-                    body: JSON.stringify({ message: 'Room code already exists' })
-                  };
-                } else {
-                  // Room code is unique, proceed to create the room
-                  const userId = JSON.parse(event.body).userId;
-                  const userData = { correctAnswers: 0, host: true };
-                  const roomKey = `room:${roomCode}`;
-                  const userKey = `user:${userId}`;
+              const roomStatusMessage = {
+                messageType: "RoomStatus",
+                roomId: roomCode
+              };
 
-                  // Use a multi/exec transaction for atomicity
-                  client.multi()
-                    .hset(roomKey, userId, JSON.stringify(userData))
-                    .hset('userRooms', userId, roomCode)
-                    .expire(roomKey, 1800)
-                    .expire(userKey, 1800)
-                    .exec((err, replies) => {
-                      if (err) {
-                        console.error('Error creating room:', err);
-                        return {
-                          statusCode: 500,
-                          body: JSON.stringify({ message: 'Failed to create room' })
-                        };
-                      } else {
-                        console.log(`Room ${roomCode} created with host ${userId}`);
-                        return {
-                          statusCode: 200,
-                          body: JSON.stringify({ message: `Room ${roomCode} created successfully` })
-                        };
-                      }
-                    });
-                }
-              });
+              await client.multi()
+                .hSet(roomKey, userId, JSON.stringify(userData))
+                .set(userId, roomCode)
+                .expire(roomKey, 1800)
+                .expire(userId, 1800)
+                .exec();
+
+              return {
+                statusCode: 200,
+                body: JSON.stringify(roomStatusMessage)
+              };
+
             } catch (error) {
               console.error('Error generating room code:', error);
               return {
                 statusCode: 500,
-                body: JSON.stringify({ message: 'Error generating room code' })
+                body: userErrorMessage
               };
+            } finally {
+              await client.quit();
             }
           };
       Runtime: nodejs20.x
-      Timeout: 3
+      Timeout: 10
       MemorySize: 128
+      Layers:
+        - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:redisLayer:1
       Environment:
         Variables:
           REDIS_ENDPOINT: !Sub "${RedisCluster.RedisEndpoint.Address}"
@@ -311,16 +406,56 @@ Resources:
       Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
       Code:
         ZipFile: |
+          const redis = require('/opt/node_modules/redis');
+
+          // Create a Redis client
+          const client = redis.createClient({
+            host: process.env.REDIS_ENDPOINT,
+            port: process.env.REDIS_PORT
+          });
+
+          // Lambda handler function
           exports.handler = async (event) => {
-            const response = {
-              statusCode: 200,
-              body: JSON.stringify('Hello from Lambda!'),
-            };
-            return response;
+            const userId = event.requestContext.connectionId;
+
+            try {
+              await client.connect();
+              const roomId = await client.get(userId);
+
+              if (!roomId) {
+                console.log(`User ${userId} is not in any room`);
+                return {
+                  statusCode: 200,
+                  body: JSON.stringify({ message: `User ${userId} is not in any room` })
+                };
+              }
+
+              await client.multi()
+                .hDel(`room:${roomId}`, userId)
+                .del(userId)
+                .exec();
+
+              console.log(`User ${userId} removed from room ${roomId}`);
+              return {
+                statusCode: 200,
+                body: JSON.stringify({ message: `User ${userId} removed from room ${roomId}` })
+              };
+
+            } catch (err) {
+              console.error('Error:', err);
+              return {
+                statusCode: 500,
+                body: JSON.stringify({ message: 'Failed to remove user from room' })
+              };
+            } finally {
+              await client.quit();
+            }
           };
       Runtime: nodejs20.x
-      Timeout: 3
+      Timeout: 10
       MemorySize: 128
+      Layers:
+        - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:redisLayer:1
       Environment:
         Variables:
           REDIS_ENDPOINT: !Sub "${RedisCluster.RedisEndpoint.Address}"
@@ -330,6 +465,85 @@ Resources:
           - !Ref LambdaSubnet
         SecurityGroupIds:
           - !Ref LambdaSecurityGroup
+
+  TriviaSendMessage:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.handler
+      FunctionName: 'TriviaSendMessage'
+      Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+      Code:
+        ZipFile: |
+          const { ApiGatewayManagementApiClient, PostToConnectionCommand} = require("@aws-sdk/client-apigatewaymanagementapi");
+          const redis = require('/opt/node_modules/redis');
+
+          const redisClient = redis.createClient({
+            host: process.env.REDIS_ENDPOINT,
+            port: process.env.REDIS_PORT
+          });
+
+          const apiClient = new ApiGatewayManagementApiClient({ endpoint: process.env.CONNECTION_URL });
+                  
+          exports.handler = async (event) => {
+              const messageType = event.messageType;
+              switch (messageType) {
+                  case "RoomStatus":
+                      const roomId = event.roomId;
+
+                      if (roomId) {
+                          await redisClient.connect();
+                          const roomData = JSON.parse(await redisClient.hGetAll(`room:${roomId}`));
+                          const userArray = [];
+                          const connectionArray = [];
+
+                          for (const user in roomData) {
+                              connectionArray.push(user);
+                              userArray.push(roomData);
+                          }
+
+                          const promises = connectionArray.map(connection => {
+                              const message = new PostToConnectionCommand({
+                                  ConnectionId: connection,
+                                  Data: JSON.stringify({
+                                      messageType: messageType,
+                                      message: roomData
+                                  })
+                              });
+                              return apiClient.send(message); // Return the promise
+                          });
+                  
+                          // Use Promise.all to send all messages concurrently
+                          await Promise.all(promises);
+                      }
+                      break;
+                  
+                  case "UserError":
+                      const userId = event.userId;
+
+                      if (userId) {
+                          await apiClient.send(new PostToConnectionCommand({ ConnectionId: userId, Data: JSON.stringify({
+                                  messageType: messageType,
+                              })
+                          }));
+                      }
+                      break;
+                  default:
+                      break;
+              }
+
+              console.dir(event);
+              return { statusCode: 200 };
+          };
+      Runtime: nodejs20.x
+      Timeout: 10
+      MemorySize: 128
+      Layers:
+        - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:redisLayer:1
+      Environment:
+        Variables:
+          CONNECTION_URL: !Sub 'https://${TriviaWebsocketApi}.execute-api.${AWS::Region}.amazonaws.com/production'
+          REDIS_ENDPOINT: !Sub "${RedisCluster.RedisEndpoint.Address}"
+          REDIS_PORT: !Sub "${RedisCluster.RedisEndpoint.Port}"
 
   TriviaStartGame:
     Type: 'AWS::Lambda::Function'

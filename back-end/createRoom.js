@@ -9,60 +9,50 @@ const client = redis.createClient({
 
 // Lambda handler function
 exports.handler = async (event) => {
+  const userId = event.userId;
+  const userErrorMessage = {
+    messageType: "UserError",
+    userId: userId
+  };
+  
   try {
+    await client.connect();
+
     const roomCode = crypto.randomBytes(4).toString('hex').toUpperCase();
+    const exists = await client.exists(`room:${roomCode}`);
+    if (exists === 1) {
+      // Room code already exists
+      console.error('Room code already exists');
+      return userErrorMessage;
+    }
 
-    // Check if the room code already exists in Redis
-    client.exists(`room:${roomCode}`, async (err, exists) => {
-      if (err) {
-        console.error('Error checking room existence:', err);
-        return {
-          statusCode: 500,
-          body: JSON.stringify({ message: 'Error checking room existence' })
-        };
-      }
+    const userData = { correctAnswers: 0, username: event.username};
+    const roomKey = `room:${roomCode}`;
 
-      if (exists === 1) {
-        // Room code already exists, generate a new one
-        return {
-          statusCode: 500,
-          body: JSON.stringify({ message: 'Room code already exists' })
-        };
-      } else {
-        // Room code is unique, proceed to create the room
-        const userId = JSON.parse(event.body).userId;
-        const userData = { correctAnswers: 0, host: true };
-        const roomKey = `room:${roomCode}`;
-        const userKey = `user:${userId}`;
+    const roomStatusMessage = {
+      messageType: "RoomStatus",
+      roomId: roomCode
+    };
 
-        // Use a multi/exec transaction for atomicity
-        client.multi()
-          .hset(roomKey, userId, JSON.stringify(userData))
-          .hset('userRooms', userId, roomCode)
-          .expire(roomKey, 1800)
-          .expire(userKey, 1800)
-          .exec((err, replies) => {
-            if (err) {
-              console.error('Error creating room:', err);
-              return {
-                statusCode: 500,
-                body: JSON.stringify({ message: 'Failed to create room' })
-              };
-            } else {
-              console.log(`Room ${roomCode} created with host ${userId}`);
-              return {
-                statusCode: 200,
-                body: JSON.stringify({ message: `Room ${roomCode} created successfully` })
-              };
-            }
-          });
-      }
-    });
+    await client.multi()
+      .hSet(roomKey, userId, JSON.stringify(userData))
+      .set(userId, roomCode)
+      .expire(roomKey, 1800)
+      .expire(userId, 1800)
+      .exec();
+
+    return {
+      statusCode: 200,
+      body: JSON.stringify(roomStatusMessage)
+    };
+
   } catch (error) {
     console.error('Error generating room code:', error);
     return {
       statusCode: 500,
-      body: JSON.stringify({ message: 'Error generating room code' })
+      body: userErrorMessage
     };
+  } finally {
+    await client.quit();
   }
 };

@@ -8,52 +8,49 @@ const client = redis.createClient({
 
 // Lambda handler function
 exports.handler = async (event) => {
-  const { userId, roomId } = JSON.parse(event.body);
+  const userId = event.userId;
+  const roomCode = event.roomId;
+  const userErrorMessage = {
+    messageType: "UserError",
+    userId: userId
+  };
+  const roomStatusMessage = {
+    messageType: "RoomStatus",
+    roomId: roomCode
+  };
 
-  // Check if room exists
-  client.exists(`room:${roomId}`, (err, exists) => {
-    if (err) {
-      console.error('Error checking room existence:', err);
-      return {
-        statusCode: 500,
-        body: JSON.stringify({ message: 'Error checking room existence' })
-      };
+  try {
+    await client.connect();
+
+    const exists = await client.exists(`room:${roomCode}`);
+    if (exists === 0) {
+      // Room code already exists
+      console.error('Room does not exist');
+      return userErrorMessage;
     }
 
-    if (exists === 1) {
-      // Room exists, proceed to add user
-      const userData = { correctAnswers: 0 };
-      const roomKey = `room:${roomId}`;
-      const userKey = `user:${userId}`;
+    const userData = { correctAnswers: 0, username: event.username};
+    const roomKey = `room:${roomCode}`;
 
-      // Use a multi/exec transaction for atomicity
-      client.multi()
-        .hset(roomKey, userId, JSON.stringify(userData))
-        .hset('userRooms', userId, roomId)
-        .expire(roomKey, 1800)
-        .expire(userKey, 1800)
-        .exec((err, replies) => {
-          if (err) {
-            console.error('Error adding user to room:', err);
-            return {
-              statusCode: 500,
-              body: JSON.stringify({ message: 'Failed to add user to room' })
-            };
-          } else {
-            console.log(`User ${userId} added to room ${roomId}`);
-            return {
-              statusCode: 200,
-              body: JSON.stringify({ message: 'User added to room successfully' })
-            };
-          }
-        });
-    } else {
-      // Room does not exist
-      console.log(`Room ${roomId} does not exist`);
-      return {
-        statusCode: 404,
-        body: JSON.stringify({ message: `Room ${roomId} does not exist` })
-      };
-    }
-  });
+    await client.multi()
+      .hSet(roomKey, userId, JSON.stringify(userData))
+      .set(userId, roomCode)
+      .expire(roomKey, 1800)
+      .expire(userId, 1800)
+      .exec();
+
+    return {
+      statusCode: 200,
+      body: JSON.stringify(roomStatusMessage)
+    };
+
+  } catch (error) {
+    console.error('Error generating room code:', error);
+    return {
+      statusCode: 500,
+      body: userErrorMessage
+    };
+  } finally {
+    await client.quit();
+  }
 };

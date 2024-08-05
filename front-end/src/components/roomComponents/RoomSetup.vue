@@ -1,16 +1,26 @@
 <template>
   <div class="room-setup">
     <button @click="startGame">Start Game</button>
+    <PlayerList :players="players" />
   </div>
 </template>
 
 <script>
+import PlayerList from './PlayerList.vue';
+
   export default {
     name: 'RoomSetup',
+    components: {
+      PlayerList
+    },
     props: {
       onStart: {
         type: Function,
         required: true
+      },
+      players: {
+        type: Array,
+        default: () => [],
       }
     },
     setup(props) {

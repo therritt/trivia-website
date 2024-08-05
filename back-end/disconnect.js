@@ -8,44 +8,38 @@ const client = redis.createClient({
 
 // Lambda handler function
 exports.handler = async (event) => {
-  const { userId } = event.requestContext.connectionId;
+  const userId = event.requestContext.connectionId;
 
-  // Fetch the current room ID from userRooms hash
-  client.hget('userRooms', userId, (err, roomId) => {
-    if (err) {
-      console.error('Error fetching room ID:', err);
-      return {
-        statusCode: 500,
-        body: JSON.stringify({ message: 'Error fetching room ID' })
-      };
-    }
+  try {
+    await client.connect();
+    const roomId = await client.get(userId);
 
     if (!roomId) {
       console.log(`User ${userId} is not in any room`);
       return {
-        statusCode: 404,
+        statusCode: 200,
         body: JSON.stringify({ message: `User ${userId} is not in any room` })
       };
     }
 
-    // Use a multi/exec transaction for atomicity
-    client.multi()
-      .hdel(`room:${roomId}`, userId) // Remove user from room
-      .hdel('userRooms', userId) // Remove room reference from userRooms
-      .exec((err, replies) => {
-        if (err) {
-          console.error('Error removing user from room:', err);
-          return {
-            statusCode: 500,
-            body: JSON.stringify({ message: 'Failed to remove user from room' })
-          };
-        } else {
-          console.log(`User ${userId} removed from room ${roomId}`);
-          return {
-            statusCode: 200,
-            body: JSON.stringify({ message: `User ${userId} removed from room ${roomId}` })
-          };
-        }
-      });
-  });
+    await client.multi()
+      .hDel(`room:${roomId}`, userId)
+      .del(userId)
+      .exec();
+
+    console.log(`User ${userId} removed from room ${roomId}`);
+    return {
+      statusCode: 200,
+      body: JSON.stringify({ message: `User ${userId} removed from room ${roomId}` })
+    };
+
+  } catch (err) {
+    console.error('Error:', err);
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ message: 'Failed to remove user from room' })
+    };
+  } finally {
+    await client.quit();
+  }
 };

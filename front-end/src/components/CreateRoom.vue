@@ -21,7 +21,7 @@
       const createRoom = () => {
         // API Placeholder
         if (roomCode.value) {
-          router.push({path: `/room/${roomCode.value}`})
+          router.push({path: `/room`, query: {username: username}})
         }
       }
 

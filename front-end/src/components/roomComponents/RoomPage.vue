@@ -11,15 +11,15 @@
     </header>
 
     <!-- Conditionally render components based on game state -->
-    <RoomSetup v-if="!isGameStarted && !showLeaderboard" :onStart="startGame" />
+    <RoomSetup v-if="!isGameStarted && !showLeaderboard" :onStart="startGame" :players="playerList"/>
     <TriviaQuestion v-if="isGameStarted && !showLeaderboard" :question="currentQuestion" :onAnswer="submitAnswer" />
     <Leaderboard v-if="showLeaderboard" :players="playerList" />
   </div>
 </template>
 
 <script>
-  import { ref, computed } from 'vue'
-  import { useRoute } from 'vue-router'
+  import { ref, computed, onMounted, onUnmounted } from 'vue'
+  import { useRoute, useRouter } from 'vue-router'
   import RoomSetup from './RoomSetup.vue'
   import TriviaQuestion from './TriviaQuestion.vue'
   import Leaderboard from './Leaderboard.vue';
@@ -33,13 +33,21 @@
     },
     setup() {
       const route = useRoute()
-      const roomCode = computed(() => route.params.roomCode)
+      const router = useRouter()
+      const roomCode = computed(() => route.params.roomCode || '')
 
       const isGameStarted = ref(false)
       const showLeaderboard = ref(false)
       const defaultQuestion = { text: '', answers: [] }
       const currentQuestion = ref(defaultQuestion)
       const playerList = ref([])
+      playerList.value = [
+            { name: route.query.username, points: 1200 },
+            { name: 'Bob', points: 1500 },
+            { name: 'Charlie', points: 800 }
+          ];
+
+      let webSocket = null
 
       const startGame = () => {
         currentQuestion.value.text =
@@ -61,13 +69,55 @@
         if (checkAnswer(answer)) {
           currentQuestion.value = defaultQuestion
           playerList.value = [
-            { name: 'Alice', points: 1200 },
+            { name: route.query.username, points: 1200 },
             { name: 'Bob', points: 1500 },
             { name: 'Charlie', points: 800 }
           ];
           showLeaderboard.value = true
         }
       }
+
+      const connectWebSocket = () => {
+        // Construct the WebSocket URL with parameters
+        const username = route.query.username || 'Guest';
+        let wsUrl = `${import.meta.env.VITE_API_URL}?username=${encodeURIComponent(username)}`;
+        if (roomCode.value && roomCode.value.length > 0) {
+          wsUrl = wsUrl + `&roomCode=${encodeURIComponent(roomCode.value)}`;
+        }
+
+        webSocket = new WebSocket(wsUrl);
+
+        webSocket.onopen = () => {
+          console.log('WebSocket connection opened');
+        };
+
+        webSocket.onmessage = (event) => {
+          console.log('Message from server:', event.data);
+          console.dir(event);
+          // Handle incoming messages
+        };
+
+        webSocket.onerror = (error) => {
+          console.error('WebSocket error:', error);
+          router.replace({path: '/'});
+        };
+
+        webSocket.onclose = () => {
+          console.log('WebSocket connection closed');
+          router.replace({path: '/'});
+        };
+      };
+
+      onMounted(() => {
+        connectWebSocket();
+      });
+
+      onUnmounted(() => {
+        if (webSocket) {
+          webSocket.close();
+        }
+        router.replace({path: '/'});
+      });
 
       return {
         roomCode,

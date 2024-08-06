@@ -11,76 +11,63 @@
     </header>
 
     <!-- Conditionally render components based on game state -->
-    <RoomSetup v-if="!isGameStarted && !showLeaderboard" :onStart="startGame" :players="playerList"/>
-    <TriviaQuestion v-if="isGameStarted && !showLeaderboard" :question="currentQuestion" :onAnswer="submitAnswer" />
+    <Loading v-if="!isConnected || isWaiting || isEndGame" :text="loadingText"/>
+    <RoomSetup v-if="isConnected && !isWaiting && !isGameStarted && !showLeaderboard" :onStart="startGame" :players="playerList"/>
+    <TriviaQuestion v-if="isConnected && isGameStarted && !isWaiting && !showLeaderboard" :question="currentQuestion" :onAnswer="submitAnswer" />
     <Leaderboard v-if="showLeaderboard" :players="playerList" />
   </div>
 </template>
 
 <script>
-  import { ref, computed, onMounted, onUnmounted } from 'vue'
+  import { ref, onMounted, onUnmounted } from 'vue'
   import { useRoute, useRouter } from 'vue-router'
   import RoomSetup from './RoomSetup.vue'
   import TriviaQuestion from './TriviaQuestion.vue'
   import Leaderboard from './Leaderboard.vue';
+import Loading from './Loading.vue';
 
   export default {
     name: 'RoomPage',
     components: {
       RoomSetup,
       TriviaQuestion,
-      Leaderboard
+      Leaderboard,
+      Loading
     },
     setup() {
       const route = useRoute()
       const router = useRouter()
-      const roomCode = computed(() => route.params.roomCode || '')
+      const roomCode = ref(route.params.roomCode || '')
 
+      const isConnected = ref(false)
+      const isEndGame = ref(false)
+      const isWaiting = ref(false)
       const isGameStarted = ref(false)
       const showLeaderboard = ref(false)
       const defaultQuestion = { text: '', answers: [] }
       const currentQuestion = ref(defaultQuestion)
       const playerList = ref([])
-      playerList.value = [
-            { name: route.query.username, points: 1200 },
-            { name: 'Bob', points: 1500 },
-            { name: 'Charlie', points: 800 }
-          ];
+      const loadingText = ref("Loading...")
 
       let webSocket = null
 
       const startGame = () => {
-        currentQuestion.value.text =
-          'In the alternate timeline in Mortal Kombat, which character was the one to slaughter the Shirai Ryu clan?? In the alternate timeline in Mortal Kombat, which character was the one to slaughter the Shirai Ryu clan??'
-        currentQuestion.value.answers = [
-          'Vue.js',
-          'Bootstrap super long string Bootstrap super long string',
-          'React',
-          'Angular'
-        ]
-        isGameStarted.value = true
-      }
-
-      const checkAnswer = (answer) => {
-        return answer === 'Vue.js'
+        webSocket.send(JSON.stringify({action: "startGame"}));
+        loadingText.value = "Loading Game..."
+        isWaiting.value = true;
       }
 
       const submitAnswer = (answer) => {
-        if (checkAnswer(answer)) {
-          currentQuestion.value = defaultQuestion
-          playerList.value = [
-            { name: route.query.username, points: 1200 },
-            { name: 'Bob', points: 1500 },
-            { name: 'Charlie', points: 800 }
-          ];
-          showLeaderboard.value = true
-        }
+        loadingText.value = "Waiting for other players to answer..."
+        isWaiting.value = true;
+        webSocket.send(JSON.stringify({action: "submitAnswer", answer: answer}));
       }
 
       const connectWebSocket = () => {
         // Construct the WebSocket URL with parameters
         const username = route.query.username || 'Guest';
         let wsUrl = `${import.meta.env.VITE_API_URL}?username=${encodeURIComponent(username)}`;
+
         if (roomCode.value && roomCode.value.length > 0) {
           wsUrl = wsUrl + `&roomCode=${encodeURIComponent(roomCode.value)}`;
         }
@@ -93,8 +80,48 @@
 
         webSocket.onmessage = (event) => {
           console.log('Message from server:', event.data);
-          console.dir(event);
-          // Handle incoming messages
+          
+          const messageData = JSON.parse(event.data);
+
+          switch(messageData.messageType) {
+            case "RoomStatus":
+              loadingText.value = "Loading Room...";
+              isConnected.value = true;
+              playerList.value = messageData.users;
+              roomCode.value = messageData.roomCode;
+              currentQuestion.value.text = messageData.questionData.question;
+              currentQuestion.value.answers = messageData.questionData.answers;
+              break;
+            
+            case "StartRound":
+              isWaiting.value = false;
+              showLeaderboard.value = false;
+              isGameStarted.value = true;
+              playerList.value = messageData.users;
+              currentQuestion.value.text = messageData.questionData.question;
+              currentQuestion.value.answers = messageData.questionData.answers;
+              break;
+
+            case "ShowLeaderboard":
+              isWaiting.value = false;
+              showLeaderboard.value = true;
+              playerList.value = messageData.users;
+              break;
+
+            case "EndGame":
+              loadingText.value = "Game Finished"
+              isEndGame.value = true;
+              isWaiting.value = false;
+              showLeaderboard.value = true;
+              isGameStarted.value = false;
+              playerList.value = messageData.users;
+              break;
+
+            case "UserError":
+              console.log('UserError occured.');
+              webSocket.close();
+              break;
+          }
         };
 
         webSocket.onerror = (error) => {
@@ -126,7 +153,11 @@
         startGame,
         submitAnswer,
         showLeaderboard,
-        playerList
+        playerList,
+        loadingText,
+        isConnected,
+        isWaiting,
+        isEndGame
       }
     }
   }

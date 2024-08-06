@@ -2,9 +2,9 @@
     <div class="leaderboard">
       <h1>Leaderboard</h1>
       <ul>
-        <li v-for="(entry, index) in sortedEntries" :key="index">
-          <span class="name">{{ entry.name }}</span>
-          <span class="points">{{ entry.points }} pts</span>
+        <li v-for="entry in sortedEntries" :key="entry.correctAnswers">
+          <span class="name">{{ entry.username }}</span>
+          <span class="points">{{ entry.correctAnswers }} pts</span>
         </li>
       </ul>
     </div>
@@ -53,10 +53,11 @@
   
   .name {
     font-weight: bold;
+    color: var(--trivia-cyan);
   }
   
   .points {
-    color: #555;
+    color: var(--trivia-cyan);
   }
   </style>
   

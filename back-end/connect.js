@@ -6,7 +6,7 @@ exports.handler = async (event) => {
   const input = JSON.stringify({
     userId: event.requestContext.connectionId,
     username: event.queryStringParameters.username || 'Guest',
-    roomId: event.queryStringParameters.roomId || undefined
+    roomId: event.queryStringParameters.roomCode || undefined
   });
 
   const params = {

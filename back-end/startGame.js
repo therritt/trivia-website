@@ -1,11 +1,19 @@
-const { ApiGatewayManagementApiClient, PostToConnectionCommand} = require("@aws-sdk/client-apigatewaymanagementapi");
-const client = new ApiGatewayManagementApiClient({ endpoint: process.env.CONNECTION_URL });
-  
-exports.handler = async (event) => {
-  const connectionId = event.requestContext.connectionId;
-  const message = new PostToConnectionCommand({ ConnectionId: connectionId, Data: "Game started" });
-  await client.send(message);
+const { SFNClient, StartExecutionCommand } = require("@aws-sdk/client-sfn");
 
-  const response = { statusCode: 200 };
-  return response;
-};
+exports.handler = async (event) => {
+  const client = new SFNClient();
+
+  const input = JSON.stringify({
+    userId: event.requestContext.connectionId
+  });
+
+  const params = {
+    stateMachineArn: process.env.SFN_ARN,
+    input: input
+  };
+
+  const command = new StartExecutionCommand(params);
+  await client.send(command);
+
+  return {statusCode: 200}
+}

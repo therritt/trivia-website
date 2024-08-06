@@ -2,8 +2,10 @@ const redis = require('/opt/node_modules/redis');
 
 // Create a Redis client
 const client = redis.createClient({
-  host: process.env.REDIS_ENDPOINT,
-  port: process.env.REDIS_PORT
+  socket: {
+    host: process.env.REDIS_ENDPOINT,
+    port: process.env.REDIS_PORT
+  }
 });
 
 // Lambda handler function
@@ -39,7 +41,8 @@ exports.handler = async (event) => {
       statusCode: 500,
       body: JSON.stringify({ message: 'Failed to remove user from room' })
     };
-  } finally {
-    await client.quit();
+  }
+  finally {
+    client.quit();
   }
 };

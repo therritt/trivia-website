@@ -2,8 +2,8 @@
     <div class="player-list">
       <h2>Player List</h2>
       <ul>
-        <li v-for="player in players" :key="player.id">
-          {{ player.name }}
+        <li v-for="player in players" :key="player.username">
+          {{ player.username }}
         </li>
       </ul>
     </div>

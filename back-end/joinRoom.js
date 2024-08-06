@@ -2,9 +2,19 @@ const redis = require('/opt/node_modules/redis');
 
 // Create a Redis client
 const client = redis.createClient({
-  host: process.env.REDIS_ENDPOINT,
-  port: process.env.REDIS_PORT
+  socket: {
+    host: process.env.REDIS_ENDPOINT,
+    port: process.env.REDIS_PORT
+  }
 });
+
+let isRedisConnected = false;
+const connectRedis = async () => {
+  if (!isRedisConnected) {
+    await client.connect();
+    isRedisConnected = true;
+  }
+};
 
 // Lambda handler function
 exports.handler = async (event) => {
@@ -19,12 +29,11 @@ exports.handler = async (event) => {
     roomId: roomCode
   };
 
-  try {
-    await client.connect();
+  await connectRedis();
 
+  try {
     const exists = await client.exists(`room:${roomCode}`);
     if (exists === 0) {
-      // Room code already exists
       console.error('Room does not exist');
       return userErrorMessage;
     }
@@ -39,18 +48,10 @@ exports.handler = async (event) => {
       .expire(userId, 1800)
       .exec();
 
-    return {
-      statusCode: 200,
-      body: JSON.stringify(roomStatusMessage)
-    };
+    return roomStatusMessage;
 
   } catch (error) {
     console.error('Error generating room code:', error);
-    return {
-      statusCode: 500,
-      body: userErrorMessage
-    };
-  } finally {
-    await client.quit();
+    return userErrorMessage;
   }
 };

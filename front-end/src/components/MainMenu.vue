@@ -46,7 +46,7 @@ export default {
 
     // Navigate to create room page
     const goToCreateRoom = () => {
-      router.push({path: '/create-room', query: {username: username.value}})
+      router.push({path: `/room`, query: {username: username.value}})
     }
 
     // Navigate to join room page

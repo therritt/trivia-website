@@ -63,6 +63,12 @@ import Loading from './Loading.vue';
         webSocket.send(JSON.stringify({action: "submitAnswer", answer: answer}));
       }
 
+      const decodeString = (string) => {
+        const txt = document.createElement('textarea');
+        txt.innerHTML = this.encodedString;
+        return txt.value;
+      }
+
       const connectWebSocket = () => {
         // Construct the WebSocket URL with parameters
         const username = route.query.username || 'Guest';
@@ -89,7 +95,7 @@ import Loading from './Loading.vue';
               isConnected.value = true;
               playerList.value = messageData.users;
               roomCode.value = messageData.roomCode;
-              currentQuestion.value.text = messageData.questionData.question;
+              currentQuestion.value.text = decodeString(messageData.questionData.question);
               currentQuestion.value.answers = messageData.questionData.answers;
               break;
             
@@ -98,7 +104,7 @@ import Loading from './Loading.vue';
               showLeaderboard.value = false;
               isGameStarted.value = true;
               playerList.value = messageData.users;
-              currentQuestion.value.text = messageData.questionData.question;
+              currentQuestion.value.text = decodeString(messageData.questionData.question);
               currentQuestion.value.answers = messageData.questionData.answers;
               break;
 

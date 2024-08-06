@@ -542,6 +542,7 @@ Resources:
       Environment:
         Variables:
           SFN_ARN: !Ref RoomStepFunction
+      KmsKeyArn: !GetAtt TriviaKMSKey.Arn
 
   TriviaJoinRoom:
     Type: 'AWS::Lambda::Function'
@@ -623,6 +624,7 @@ Resources:
           - !Ref LambdaSubnet
         SecurityGroupIds:
           - !Ref LambdaSecurityGroup
+      KmsKeyArn: !GetAtt TriviaKMSKey.Arn
 
   TriviaCreateRoom:
     Type: 'AWS::Lambda::Function'
@@ -707,6 +709,7 @@ Resources:
           - !Ref LambdaSubnet
         SecurityGroupIds:
           - !Ref LambdaSecurityGroup
+      KmsKeyArn: !GetAtt TriviaKMSKey.Arn
 
   TriviaDisconnect:
     Type: 'AWS::Lambda::Function'
@@ -784,6 +787,7 @@ Resources:
           - !Ref LambdaSubnet
         SecurityGroupIds:
           - !Ref LambdaSecurityGroup
+      KmsKeyArn: !GetAtt TriviaKMSKey.Arn
 
   TriviaGetData:
     Type: 'AWS::Lambda::Function'
@@ -884,6 +888,7 @@ Resources:
           - !Ref LambdaSubnet
         SecurityGroupIds:
           - !Ref LambdaSecurityGroup
+      KmsKeyArn: !GetAtt TriviaKMSKey.Arn
 
   TriviaSendMessage:
     Type: 'AWS::Lambda::Function'
@@ -918,6 +923,7 @@ Resources:
       Environment:
         Variables:
           CONNECTION_URL: !Sub 'https://${TriviaWebsocketApi}.execute-api.${AWS::Region}.amazonaws.com/production'
+      KmsKeyArn: !GetAtt TriviaKMSKey.Arn
 
   TriviaGetQuestions:
     Type: 'AWS::Lambda::Function'
@@ -968,6 +974,7 @@ Resources:
       MemorySize: 128
       Layers:
         - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:axiosLayer:2
+      KmsKeyArn: !GetAtt TriviaKMSKey.Arn
 
   TriviaStartRound:
     Type: 'AWS::Lambda::Function'
@@ -1038,6 +1045,7 @@ Resources:
           - !Ref LambdaSubnet
         SecurityGroupIds:
           - !Ref LambdaSecurityGroup
+      KmsKeyArn: !GetAtt TriviaKMSKey.Arn
 
   TriviaStartGame:
     Type: 'AWS::Lambda::Function'
@@ -1072,6 +1080,7 @@ Resources:
       Environment:
         Variables:
           SFN_ARN: !Ref GameStepFunction
+      KmsKeyArn: !GetAtt TriviaKMSKey.Arn
 
   TriviaSubmitAnswer:
     Type: 'AWS::Lambda::Function'
@@ -1144,6 +1153,7 @@ Resources:
           - !Ref LambdaSubnet
         SecurityGroupIds:
           - !Ref LambdaSecurityGroup
+      KmsKeyArn: !GetAtt TriviaKMSKey.Arn
 
   # Lambda Invocation Permissions
   ConnectPermission:

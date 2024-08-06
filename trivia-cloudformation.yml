@@ -1,0 +1,1298 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Trivia game backend websocket api with respective integrations
+
+Resources:
+  # KMS Key for encryption
+  TriviaKMSKey:
+    Type: 'AWS::KMS::Key'
+    Properties:
+      Description: 'KMS key for encrypting S3 bucket'
+      KeyUsage: 'ENCRYPT_DECRYPT'
+      Enabled: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+            Action: 'kms:*'
+            Resource: '*'
+          - Effect: 'Allow'
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+
+  TriviaKeyAlias:
+    Type: 'AWS::KMS::Alias'
+    Properties:
+      AliasName: 'alias/trivia-website-key'
+      TargetKeyId: !Ref TriviaKMSKey
+
+  # S3 Bucket for trivia website
+  TriviaWebsiteBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: 'trivia-duel-website-bucket'
+      WebsiteConfiguration:
+        IndexDocument: 'index.html'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        IgnorePublicAcls: false
+        BlockPublicPolicy: false
+        RestrictPublicBuckets: false
+
+  TriviaBucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref TriviaWebsiteBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: 'PublicReadGetObject'
+            Effect: 'Allow'
+            Principal: '*'
+            Action: 's3:GetObject'
+            Resource: !Sub 'arn:aws:s3:::${TriviaWebsiteBucket}/*'
+
+  # VPC
+  CacheVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 11.0.0.0/16
+      Tags:
+        - Key: Name
+          Value: CacheVPC
+
+  # Lambda (Public) Subnet
+  LambdaSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref CacheVPC
+      CidrBlock: 11.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: LambdaSubnet
+
+  # Cache (Private) Subnet
+  CacheSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref CacheVPC
+      CidrBlock: 11.0.2.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: CacheSubnet
+
+  # Internet Gateway
+  CacheVpcInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: CacheVpcInternetGateway
+
+  # Internet Gateway Attachment
+  CacheVPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref CacheVPC
+      InternetGatewayId: !Ref CacheVpcInternetGateway
+
+  # Route Table for Lambda (Public) Subnet
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref CacheVPC
+
+  # Route to Internet Gateway
+  InternetRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref CacheVpcInternetGateway
+
+  # Lambda Subnet -> Route Table Association
+  LambdaSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref LambdaSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # Security Group for lambdas to interact w/ redis cluster
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Lambda function in public subnet
+      VpcId: !Ref CacheVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+
+  # Security Group for Redis Cache, allows access from lambdas
+  RedisAccessSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow access to ElastiCache from Lambda subnet
+      VpcId: !Ref CacheVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
+
+  # ElastiCache Redis Cluster (one node)
+  RedisCluster:
+    Type: AWS::ElastiCache::ReplicationGroup
+    Properties:
+      AutomaticFailoverEnabled: false
+      ReplicationGroupId: 'trivia-redis-group'
+      ReplicationGroupDescription: 'Trivia Duel single node group'
+      Engine: redis
+      CacheNodeType: cache.t4g.micro
+      NumCacheClusters: 1
+      CacheSubnetGroupName: !Ref RedisSubnetGroup
+      SecurityGroupIds:
+        - !Ref RedisAccessSecurityGroup
+      AtRestEncryptionEnabled: true
+      TransitEncryptionEnabled: true
+      KmsKeyId: !Ref TriviaKMSKey
+
+  # Cache Subnet Group
+  RedisSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      CacheSubnetGroupName: RedisSubnetGroup
+      SubnetIds:
+        - !Ref CacheSubnet
+      Description: Subnet group for ElastiCache Redis
+
+  # Step functions
+  RoomStepFunction:
+    Type: 'AWS::StepFunctions::StateMachine'
+    Properties:
+      DefinitionString: !Sub |
+        {
+          "Comment": "Handles room creation and joining",
+          "StartAt": "Check RoomID",
+          "States": {
+            "Check RoomID": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.roomId",
+                  "IsPresent": true,
+                  "Next": "Join Room"
+                }
+              ],
+              "Default": "Create Room"
+            },
+            "Join Room": {
+              "Type": "Task",
+              "Resource": "${TriviaJoinRoom.Arn}",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "Next": "Get message data"
+            },
+            "Create Room": {
+              "Type": "Task",
+              "Resource": "${TriviaCreateRoom.Arn}",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "Next": "Get message data"
+            },
+            "Get message data": {
+              "Type": "Task",
+              "Resource": "${TriviaGetData.Arn}",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "Next": "Send Web Socket Message"
+            },
+            "Send Web Socket Message": {
+              "Type": "Task",
+              "Resource": "${TriviaSendMessage.Arn}",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "End": true
+            }
+          }
+        }
+      RoleArn: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+
+  GameStepFunction:
+    Type: 'AWS::StepFunctions::StateMachine'
+    Properties:
+      DefinitionString: !Sub |
+        {
+          "Comment": "A description of my state machine",
+          "StartAt": "GetQuestions",
+          "States": {
+            "GetQuestions": {
+              "Type": "Task",
+              "Resource": "${TriviaGetQuestions.Arn}",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "Next": "StartRound"
+            },
+            "StartRound": {
+              "Type": "Task",
+              "Resource": "${TriviaStartRound.Arn}",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "Next": "Send StartRound"
+            },
+            "Send StartRound": {
+              "Type": "Parallel",
+              "Next": "Round Wait",
+              "Branches": [
+                {
+                  "StartAt": "Pass data to End Round",
+                  "States": {
+                    "Pass data to End Round": {
+                      "Type": "Pass",
+                      "End": true
+                    }
+                  }
+                },
+                {
+                  "StartAt": "Get Room Data",
+                  "States": {
+                    "Get Room Data": {
+                      "Type": "Task",
+                      "Resource": "${TriviaGetData.Arn}",
+                      "Retry": [
+                        {
+                          "ErrorEquals": [
+                            "Lambda.ServiceException",
+                            "Lambda.AWSLambdaException",
+                            "Lambda.SdkClientException",
+                            "Lambda.TooManyRequestsException"
+                          ],
+                          "IntervalSeconds": 1,
+                          "MaxAttempts": 3,
+                          "BackoffRate": 2
+                        }
+                      ],
+                      "Next": "Send Start Message"
+                    },
+                    "Send Start Message": {
+                      "Type": "Task",
+                      "Resource": "${TriviaSendMessage.Arn}",
+                      "Retry": [
+                        {
+                          "ErrorEquals": [
+                            "Lambda.ServiceException",
+                            "Lambda.AWSLambdaException",
+                            "Lambda.SdkClientException",
+                            "Lambda.TooManyRequestsException"
+                          ],
+                          "IntervalSeconds": 1,
+                          "MaxAttempts": 3,
+                          "BackoffRate": 2
+                        }
+                      ],
+                      "End": true
+                    }
+                  }
+                }
+              ],
+              "OutputPath": "$[0]"
+            },
+            "Round Wait": {
+              "Type": "Wait",
+              "Seconds": 15,
+              "Next": "Send ShowLeaderboard"
+            },
+            "Send ShowLeaderboard": {
+              "Type": "Parallel",
+              "Next": "Choice",
+              "Branches": [
+                {
+                  "StartAt": "Pass remaining data to StartRound",
+                  "States": {
+                    "Pass remaining data to StartRound": {
+                      "Type": "Pass",
+                      "End": true
+                    }
+                  }
+                },
+                {
+                  "StartAt": "Set type to ShowLeaderboard",
+                  "States": {
+                    "Set type to ShowLeaderboard": {
+                      "Type": "Pass",
+                      "Next": "Get Room Data (1)",
+                      "InputPath": "$",
+                      "Parameters": {
+                        "messageType": "ShowLeaderboard",
+                        "roomId.$": "$.roomId"
+                      }
+                    },
+                    "Get Room Data (1)": {
+                      "Type": "Task",
+                      "Resource": "${TriviaGetData.Arn}",
+                      "Retry": [
+                        {
+                          "ErrorEquals": [
+                            "Lambda.ServiceException",
+                            "Lambda.AWSLambdaException",
+                            "Lambda.SdkClientException",
+                            "Lambda.TooManyRequestsException"
+                          ],
+                          "IntervalSeconds": 1,
+                          "MaxAttempts": 3,
+                          "BackoffRate": 2
+                        }
+                      ],
+                      "Next": "Send LeaderboardMessage"
+                    },
+                    "Send LeaderboardMessage": {
+                      "Type": "Task",
+                      "Resource": "${TriviaSendMessage.Arn}",
+                      "Retry": [
+                        {
+                          "ErrorEquals": [
+                            "Lambda.ServiceException",
+                            "Lambda.AWSLambdaException",
+                            "Lambda.SdkClientException",
+                            "Lambda.TooManyRequestsException"
+                          ],
+                          "IntervalSeconds": 1,
+                          "MaxAttempts": 3,
+                          "BackoffRate": 2
+                        }
+                      ],
+                      "End": true
+                    }
+                  }
+                }
+              ],
+              "OutputPath": "$[0]"
+            },
+            "Choice": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.remainingQuestions",
+                  "NumericGreaterThan": 0,
+                  "Next": "Leaderboard Wait"
+                }
+              ],
+              "Default": "Set type to EndGame"
+            },
+            "Leaderboard Wait": {
+              "Type": "Wait",
+              "Seconds": 5,
+              "Next": "StartRound"
+            },
+            "Set type to EndGame": {
+              "Type": "Pass",
+              "Next": "Get Room Data (2)",
+              "InputPath": "$",
+              "Parameters": {
+                "messageType": "EndGame",
+                "roomId.$": "$.roomId"
+              }
+            },
+            "Get Room Data (2)": {
+              "Type": "Task",
+              "Resource": "${TriviaGetData.Arn}",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "Next": "Send End message"
+            },
+            "Send End message": {
+              "Type": "Task",
+              "Resource": "${TriviaSendMessage.Arn}",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "End": true
+            }
+          }
+        }
+      RoleArn: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+
+  # Lambda Functions
+  TriviaConnect:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.handler
+      FunctionName: 'TriviaConnect'
+      Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+      Code:
+        ZipFile: |
+          const { SFNClient, StartExecutionCommand } = require("@aws-sdk/client-sfn");
+
+          exports.handler = async (event) => {
+            const client = new SFNClient();
+
+            const input = JSON.stringify({
+              userId: event.requestContext.connectionId,
+              username: event.queryStringParameters.username || 'Guest',
+              roomId: event.queryStringParameters.roomCode || undefined
+            });
+
+            const params = {
+              stateMachineArn: process.env.SFN_ARN,
+              input: input
+            };
+
+            const command = new StartExecutionCommand(params);
+            await client.send(command);
+
+            return {statusCode: 200}
+          }
+      Runtime: nodejs20.x
+      Timeout: 5
+      MemorySize: 128
+      Environment:
+        Variables:
+          SFN_ARN: !Ref RoomStepFunction
+      KmsKeyArn: !GetAtt TriviaKMSKey.Arn
+
+  TriviaJoinRoom:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.handler
+      FunctionName: 'TriviaJoinRoom'
+      Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+      Code:
+        ZipFile: |
+          const redis = require('/opt/node_modules/redis');
+
+          // Create a Redis client
+          const client = redis.createClient({
+            socket: {
+              host: process.env.REDIS_ENDPOINT,
+              port: process.env.REDIS_PORT,
+              tls: true
+            }
+          });
+
+          let isRedisConnected = false;
+          const connectRedis = async () => {
+            if (!isRedisConnected) {
+              await client.connect();
+              isRedisConnected = true;
+            }
+          };
+
+          // Lambda handler function
+          exports.handler = async (event) => {
+            const userId = event.userId;
+            const roomCode = event.roomId;
+            const userErrorMessage = {
+              messageType: "UserError",
+              userId: userId
+            };
+            const roomStatusMessage = {
+              messageType: "RoomStatus",
+              roomId: roomCode
+            };
+
+            await connectRedis();
+
+            try {
+              const exists = await client.exists(`room:${roomCode}`);
+              if (exists === 0) {
+                console.error('Room does not exist');
+                return userErrorMessage;
+              }
+
+              const userData = { correctAnswers: 0, username: event.username};
+              const roomKey = `room:${roomCode}`;
+
+              await client.multi()
+                .hSet(roomKey, userId, JSON.stringify(userData))
+                .set(userId, roomCode)
+                .expire(roomKey, 1800)
+                .expire(userId, 1800)
+                .exec();
+
+              return roomStatusMessage;
+
+            } catch (error) {
+              console.error('Error generating room code:', error);
+              return userErrorMessage;
+            }
+          };
+      Runtime: nodejs20.x
+      Timeout: 10
+      MemorySize: 128
+      Layers:
+        - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:redisLayer:1
+      Environment:
+        Variables:
+          REDIS_ENDPOINT: !Sub "${RedisCluster.PrimaryEndPoint.Address}"
+          REDIS_PORT: !Sub "${RedisCluster.PrimaryEndPoint.Port}"
+      VpcConfig:
+        SubnetIds:
+          - !Ref LambdaSubnet
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+      KmsKeyArn: !GetAtt TriviaKMSKey.Arn
+
+  TriviaCreateRoom:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.handler
+      FunctionName: 'TriviaCreateRoom'
+      Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+      Code:
+        ZipFile: |
+          const redis = require('/opt/node_modules/redis');
+          const crypto = require('crypto');
+
+          // Create a Redis client
+          const client = redis.createClient({
+              socket: {
+                  host: process.env.REDIS_ENDPOINT,
+                  port: process.env.REDIS_PORT,
+                  tls: true
+              }
+          });
+
+          let isRedisConnected = false;
+          const connectRedis = async () => {
+            if (!isRedisConnected) {
+              await client.connect();
+              isRedisConnected = true;
+            }
+          };
+
+          // Lambda handler function
+          exports.handler = async (event) => {
+            const userId = event.userId;
+            const userErrorMessage = {
+              messageType: "UserError",
+              userId: userId
+            };
+            
+            await connectRedis();
+
+            try {
+              const roomCode = crypto.randomBytes(4).toString('hex').toUpperCase();
+              const exists = await client.exists(`room:${roomCode}`);
+              if (exists === 1) {
+                console.error('Room code already exists');
+                return userErrorMessage;
+              }
+
+              const userData = { correctAnswers: 0, username: event.username};
+              const roomKey = `room:${roomCode}`;
+
+              const roomStatusMessage = {
+                messageType: "RoomStatus",
+                roomId: roomCode
+              };
+
+              await client.multi()
+                .hSet(roomKey, userId, JSON.stringify(userData))
+                .hSet(roomKey, "question", JSON.stringify({question: "", answers: [], correctAnswer: ""}))
+                .set(userId, roomCode)
+                .expire(roomKey, 1800)
+                .expire(userId, 1800)
+                .exec();
+
+              return roomStatusMessage;
+
+            } catch (error) {
+              console.error('Error generating room code:', error);
+              return userErrorMessage;
+            }
+          };
+      Runtime: nodejs20.x
+      Timeout: 10
+      MemorySize: 128
+      Layers:
+        - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:redisLayer:1
+      Environment:
+        Variables:
+          REDIS_ENDPOINT: !Sub "${RedisCluster.PrimaryEndPoint.Address}"
+          REDIS_PORT: !Sub "${RedisCluster.PrimaryEndPoint.Port}"
+      VpcConfig:
+        SubnetIds:
+          - !Ref LambdaSubnet
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+      KmsKeyArn: !GetAtt TriviaKMSKey.Arn
+
+  TriviaDisconnect:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.handler
+      FunctionName: 'TriviaDisconnect'
+      Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+      Code:
+        ZipFile: |
+          const redis = require('/opt/node_modules/redis');
+
+          // Create a Redis client
+          const client = redis.createClient({
+            socket: {
+              host: process.env.REDIS_ENDPOINT,
+              port: process.env.REDIS_PORT,
+              tls: true
+            }
+          });
+          let isRedisConnected = false;
+
+          const connectRedis = async () => {
+            if (!isRedisConnected) {
+              await client.connect();
+              isRedisConnected = true;
+            }
+          };
+
+          // Lambda handler function
+          exports.handler = async (event) => {
+            const userId = event.requestContext.connectionId;
+            await connectRedis();
+
+            try {
+              const roomId = await client.get(userId);
+
+              if (!roomId) {
+                console.log(`User ${userId} is not in any room`);
+                return {
+                  statusCode: 200,
+                  body: JSON.stringify({ message: `User ${userId} is not in any room` })
+                };
+              }
+
+              await client.multi()
+                .hDel(`room:${roomId}`, userId)
+                .del(userId)
+                .exec();
+
+              console.log(`User ${userId} removed from room ${roomId}`);
+              return {
+                statusCode: 200,
+                body: JSON.stringify({ message: `User ${userId} removed from room ${roomId}` })
+              };
+
+            } catch (err) {
+              console.error('Error:', err);
+              return {
+                statusCode: 500,
+                body: JSON.stringify({ message: 'Failed to remove user from room' })
+              };
+            }
+          };
+      Runtime: nodejs20.x
+      Timeout: 10
+      MemorySize: 128
+      Layers:
+        - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:redisLayer:1
+      Environment:
+        Variables:
+          REDIS_ENDPOINT: !Sub "${RedisCluster.PrimaryEndPoint.Address}"
+          REDIS_PORT: !Sub "${RedisCluster.PrimaryEndPoint.Port}"
+      VpcConfig:
+        SubnetIds:
+          - !Ref LambdaSubnet
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+      KmsKeyArn: !GetAtt TriviaKMSKey.Arn
+
+  TriviaGetData:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.handler
+      FunctionName: 'TriviaGetData'
+      Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+      Code:
+        ZipFile: |
+          const redis = require('/opt/node_modules/redis');
+
+          const redisClient = redis.createClient({
+              socket: {
+                  host: process.env.REDIS_ENDPOINT,
+                  port: process.env.REDIS_PORT,
+                  tls: true
+              }
+          });
+
+          let isRedisConnected = false;
+          const connectRedis = async () => {
+            if (!isRedisConnected) {
+              await redisClient.connect();
+              isRedisConnected = true;
+            }
+          };
+                  
+          exports.handler = async (event) => {
+              try {
+                  const messageType = event.messageType;
+                  await connectRedis();
+                  switch (messageType) {
+                      case "EndGame":
+                      case "ShowLeaderboard":
+                      case "StartRound":
+                      case "RoomStatus":
+                          const roomId = event.roomId;
+              
+                          if (roomId) {
+                              const roomData = await redisClient.hGetAll(`room:${roomId}`);
+                              const userArray = [];
+                              const connectionArray = [];
+              
+                              for (const user in roomData) {
+                                  if (user !== "question") {
+                                      connectionArray.push(user);
+                                      userArray.push(JSON.parse(roomData[user]));
+                                  }
+                              }
+                              
+                              const questionData = JSON.parse(roomData["question"]);
+                              
+                              const stringData = JSON.stringify({
+                                  messageType: messageType,
+                                  roomCode: roomId,
+                                  users: userArray,
+                                  questionData: {question: questionData.question, answers: questionData.answers}
+                              });
+              
+                              return {
+                                connections: connectionArray,
+                                data: stringData
+                              };
+                          }
+                          break;
+                      
+                      case "UserError":
+                          const userId = event.userId;
+                          if (userId) {
+                              return {
+                                connections: [userId],
+                                data: JSON.stringify({messageType: "UserError"})
+                              };
+                          }
+                          break;
+                      default:
+                          break;
+                  }
+              
+                  console.dir(event);
+                  return { statusCode: 200 };
+              }
+              catch(e) {
+                  console.error('Error sending messages:', e);
+              }
+          };
+      Runtime: nodejs20.x
+      Timeout: 10
+      MemorySize: 128
+      Layers:
+        - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:redisLayer:1
+      Environment:
+        Variables:
+          REDIS_ENDPOINT: !Sub "${RedisCluster.PrimaryEndPoint.Address}"
+          REDIS_PORT: !Sub "${RedisCluster.PrimaryEndPoint.Port}"
+      VpcConfig:
+        SubnetIds:
+          - !Ref LambdaSubnet
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+      KmsKeyArn: !GetAtt TriviaKMSKey.Arn
+
+  TriviaSendMessage:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.handler
+      FunctionName: 'TriviaSendMessage'
+      Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+      Code:
+        ZipFile: |
+          const { ApiGatewayManagementApiClient, PostToConnectionCommand} = require("@aws-sdk/client-apigatewaymanagementapi");
+          const apiClient = new ApiGatewayManagementApiClient({ endpoint: process.env.CONNECTION_URL });
+                  
+          exports.handler = async (event) => {
+              try {
+                  const promises = event.connections.map(async (connection) => {
+                      const command = new PostToConnectionCommand({
+                          ConnectionId: connection,
+                          Data: event.data
+                      });
+                      return apiClient.send(command);
+                  });
+              
+                  return await Promise.all(promises);
+              }
+              catch(e) {
+                  console.error('Error sending messages:', e);
+              }
+          };
+      Runtime: nodejs20.x
+      Timeout: 10
+      MemorySize: 128
+      Environment:
+        Variables:
+          CONNECTION_URL: !Sub 'https://${TriviaWebsocketApi}.execute-api.${AWS::Region}.amazonaws.com/production'
+      KmsKeyArn: !GetAtt TriviaKMSKey.Arn
+
+  TriviaGetQuestions:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.handler
+      FunctionName: 'TriviaGetQuestions'
+      Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+      Code:
+        ZipFile: |
+          const axios = require('axios');
+
+          exports.handler = async (event) => {
+              try {
+                  // Make a GET request to the trivia API
+                  let url = 'https://opentdb.com/api.php?amount=5';
+                  url = url + (event.category || "");
+                  const response = await axios.get(url);
+                  
+                  // Extract the trivia questions from the response
+                  const triviaQuestions = response.data.results.map((questionData) => {
+                      let combinedShuffledAnswers = questionData.incorrect_answers;
+                      combinedShuffledAnswers.push(questionData.correct_answer);
+                      combinedShuffledAnswers.sort();
+                      return {
+                          question: questionData.question,
+                          correctAnswer: questionData.correct_answer,
+                          answers: combinedShuffledAnswers
+                      }
+                  });
+
+                  return {
+                      userId: event.userId,
+                      questions: triviaQuestions
+                  }
+              } catch (error) {
+                  console.error('Error fetching trivia questions:', error.message);
+                  return {
+                      statusCode: 500,
+                      body: JSON.stringify({
+                          message: 'Failed to retrieve trivia questions',
+                          error: error.message
+                      }),
+                  };
+              }
+          };
+      Runtime: nodejs20.x
+      Timeout: 10
+      MemorySize: 128
+      Layers:
+        - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:axiosLayer:2
+      KmsKeyArn: !GetAtt TriviaKMSKey.Arn
+
+  TriviaStartRound:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.handler
+      FunctionName: 'TriviaStartRound'
+      Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+      Code:
+        ZipFile: |
+          const redis = require('/opt/node_modules/redis');
+
+          // Create a Redis client
+          const client = redis.createClient({
+            socket: {
+              host: process.env.REDIS_ENDPOINT,
+              port: process.env.REDIS_PORT,
+              tls: true
+            }
+          });
+
+          let isRedisConnected = false;
+          const connectRedis = async () => {
+            if (!isRedisConnected) {
+              await client.connect();
+              isRedisConnected = true;
+            }
+          };
+
+          // Lambda handler function
+          exports.handler = async (event) => {
+            await connectRedis();
+
+            try {
+              let roomCode = event.roomId || await client.get(event.userId);
+
+              const roomKey = `room:${roomCode}`;
+
+              const questions = event.questions;
+              const nextQuestion = questions.pop();
+
+              await client.multi()
+                .hSet(roomKey, "question", JSON.stringify(nextQuestion))
+                .exec();
+
+              return {
+                  messageType: "StartRound",
+                  roomId: roomCode,
+                  questions: questions,
+                  remainingQuestions: questions.length
+              };
+
+            } catch (error) {
+              console.error('Error starting round:', error);
+              return userErrorMessage;
+            }
+          };
+      Runtime: nodejs20.x
+      Timeout: 10
+      MemorySize: 128
+      Layers:
+        - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:redisLayer:1
+      Environment:
+        Variables:
+          REDIS_ENDPOINT: !Sub "${RedisCluster.PrimaryEndPoint.Address}"
+          REDIS_PORT: !Sub "${RedisCluster.PrimaryEndPoint.Port}"
+      VpcConfig:
+        SubnetIds:
+          - !Ref LambdaSubnet
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+      KmsKeyArn: !GetAtt TriviaKMSKey.Arn
+
+  TriviaStartGame:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.handler
+      FunctionName: 'TriviaStartGame'
+      Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+      Code:
+        ZipFile: |
+          const { SFNClient, StartExecutionCommand } = require("@aws-sdk/client-sfn");
+
+          exports.handler = async (event) => {
+            const client = new SFNClient();
+
+            const input = JSON.stringify({
+              userId: event.requestContext.connectionId
+            });
+
+            const params = {
+              stateMachineArn: process.env.SFN_ARN,
+              input: input
+            };
+
+            const command = new StartExecutionCommand(params);
+            await client.send(command);
+
+            return {statusCode: 200}
+          }
+      Runtime: nodejs20.x
+      Timeout: 3
+      MemorySize: 128
+      Environment:
+        Variables:
+          SFN_ARN: !Ref GameStepFunction
+      KmsKeyArn: !GetAtt TriviaKMSKey.Arn
+
+  TriviaSubmitAnswer:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.handler
+      FunctionName: 'TriviaSubmitAnswer'
+      Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+      Code:
+        ZipFile: |
+          const redis = require('/opt/node_modules/redis');
+
+          // Create a Redis client
+          const client = redis.createClient({
+            socket: {
+              host: process.env.REDIS_ENDPOINT,
+              port: process.env.REDIS_PORT,
+              tls: true
+            }
+          });
+
+          let isRedisConnected = false;
+          const connectRedis = async () => {
+            if (!isRedisConnected) {
+              await client.connect();
+              isRedisConnected = true;
+            }
+          };
+
+          // Lambda handler function
+          exports.handler = async (event) => {
+            await connectRedis();
+
+            try {
+              const userId = event.requestContext.connectionId;
+              const roomCode = await client.get(userId);
+              const roomKey = `room:${roomCode}`;
+
+              const currentUser = JSON.parse(await client.hGet(roomKey, userId));
+              const currentQuestion = JSON.parse(await client.hGet(roomKey, "question"));
+              
+              if (currentQuestion.correctAnswer === JSON.parse(event.body).answer) {
+                console.log("Correct Answer!")
+                currentUser.correctAnswers = currentUser.correctAnswers + 1;
+              }
+
+              await client.hSet(roomKey, userId, JSON.stringify(currentUser));
+
+              return {
+                statusCode: 200
+              }
+
+            } catch (error) {
+              console.error('Error submitting response:', error);
+              return {
+                statusCode: 500
+              };
+            }
+          };
+      Runtime: nodejs20.x
+      Timeout: 3
+      MemorySize: 128
+      Layers:
+        - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:redisLayer:1
+      Environment:
+        Variables:
+          REDIS_ENDPOINT: !Sub "${RedisCluster.PrimaryEndPoint.Address}"
+          REDIS_PORT: !Sub "${RedisCluster.PrimaryEndPoint.Port}"
+      VpcConfig:
+        SubnetIds:
+          - !Ref LambdaSubnet
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+      KmsKeyArn: !GetAtt TriviaKMSKey.Arn
+
+  # Lambda Invocation Permissions
+  ConnectPermission:
+    Type: AWS::Lambda::Permission
+    DependsOn:
+      - TriviaWebsocketApi
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref TriviaConnect
+      Principal: apigateway.amazonaws.com
+
+  DisconnectPermission:
+    Type: AWS::Lambda::Permission
+    DependsOn:
+      - TriviaWebsocketApi
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref TriviaDisconnect
+      Principal: apigateway.amazonaws.com
+
+  StartGamePermission:
+    Type: AWS::Lambda::Permission
+    DependsOn:
+      - TriviaWebsocketApi
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref TriviaStartGame
+      Principal: apigateway.amazonaws.com
+
+  SubmitAnswerPermission:
+    Type: AWS::Lambda::Permission
+    DependsOn:
+      - TriviaWebsocketApi
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref TriviaSubmitAnswer
+      Principal: apigateway.amazonaws.com
+
+  # Trivia WebSocket API
+  TriviaWebsocketApi:
+    Type: 'AWS::ApiGatewayV2::Api'
+    Properties:
+      Name: TriviaWebsocketApi
+      ProtocolType: WEBSOCKET
+      RouteSelectionExpression: '$request.body.action'
+
+  # Deployment
+  Deployment:
+    Type: AWS::ApiGatewayV2::Deployment
+    DependsOn:
+      - ConnectRoute
+      - DisconnectRoute
+      - StartGameRoute
+      - SubmitAnswerRoute
+    Properties:
+      ApiId: !Ref TriviaWebsocketApi
+
+  # Stages
+  ApiStage:
+    Type: 'AWS::ApiGatewayV2::Stage'
+    Properties:
+      ApiId: !Ref TriviaWebsocketApi
+      StageName: production
+      DeploymentId: !Ref Deployment
+
+  # WebSocket Routes
+  ConnectRoute:
+    Type: 'AWS::ApiGatewayV2::Route'
+    Properties:
+      ApiId: !Ref TriviaWebsocketApi
+      RouteKey: '$connect'
+      AuthorizationType: NONE
+      Target: !Join
+        - '/'
+        -
+          - 'integrations'
+          - !Ref ConnectIntegration
+
+  DisconnectRoute:
+    Type: 'AWS::ApiGatewayV2::Route'
+    Properties:
+      ApiId: !Ref TriviaWebsocketApi
+      RouteKey: '$disconnect'
+      AuthorizationType: NONE
+      Target: !Join
+        - '/'
+        -
+          - 'integrations'
+          - !Ref DisconnectIntegration
+
+  StartGameRoute:
+    Type: 'AWS::ApiGatewayV2::Route'
+    Properties:
+      ApiId: !Ref TriviaWebsocketApi
+      RouteKey: 'startGame'
+      AuthorizationType: NONE
+      Target: !Join
+        - '/'
+        -
+          - 'integrations'
+          - !Ref StartGameIntegration
+
+  SubmitAnswerRoute:
+    Type: 'AWS::ApiGatewayV2::Route'
+    Properties:
+      ApiId: !Ref TriviaWebsocketApi
+      RouteKey: 'submitAnswer'
+      AuthorizationType: NONE
+      Target: !Join
+        - '/'
+        - 
+          - 'integrations'
+          - !Ref SubmitAnswerIntegration
+
+  # Integrations
+  ConnectIntegration:
+    Type: 'AWS::ApiGatewayV2::Integration'
+    Properties:
+      ApiId: !Ref TriviaWebsocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${TriviaConnect.Arn}/invocations'
+
+  DisconnectIntegration:
+    Type: 'AWS::ApiGatewayV2::Integration'
+    Properties:
+      ApiId: !Ref TriviaWebsocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${TriviaDisconnect.Arn}/invocations'
+
+  StartGameIntegration:
+    Type: 'AWS::ApiGatewayV2::Integration'
+    Properties:
+      ApiId: !Ref TriviaWebsocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${TriviaStartGame.Arn}/invocations'
+
+  SubmitAnswerIntegration:
+    Type: 'AWS::ApiGatewayV2::Integration'
+    Properties:
+      ApiId: !Ref TriviaWebsocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${TriviaSubmitAnswer.Arn}/invocations'

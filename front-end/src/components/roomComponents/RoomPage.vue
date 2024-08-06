@@ -65,7 +65,7 @@ import Loading from './Loading.vue';
 
       const decodeString = (string) => {
         const txt = document.createElement('textarea');
-        txt.innerHTML = this.encodedString;
+        txt.innerHTML = string;
         return txt.value;
       }
 

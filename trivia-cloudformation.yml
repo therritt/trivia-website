@@ -2,6 +2,59 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: Trivia game backend websocket api with respective integrations
 
 Resources:
+  # KMS Key for encryption
+  TriviaKMSKey:
+    Type: 'AWS::KMS::Key'
+    Properties:
+      Description: 'KMS key for encrypting S3 bucket'
+      KeyUsage: 'ENCRYPT_DECRYPT'
+      Enabled: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+            Action: 'kms:*'
+            Resource: '*'
+          - Effect: 'Allow'
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+
+  TriviaKeyAlias:
+    Type: 'AWS::KMS::Alias'
+    Properties:
+      AliasName: 'alias/trivia-website-key'
+      TargetKeyId: !Ref TriviaKMSKey
+
+  # S3 Bucket for trivia website
+  TriviaWebsiteBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: 'trivia-duel-website-bucket'
+      WebsiteConfiguration:
+        IndexDocument: 'index.html'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        IgnorePublicAcls: false
+        BlockPublicPolicy: false
+        RestrictPublicBuckets: false
+
+  TriviaBucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref TriviaWebsiteBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: 'PublicReadGetObject'
+            Effect: 'Allow'
+            Principal: '*'
+            Action: 's3:GetObject'
+            Resource: !Sub 'arn:aws:s3:::${TriviaWebsiteBucket}/*'
+
   # VPC
   CacheVPC:
     Type: AWS::EC2::VPC

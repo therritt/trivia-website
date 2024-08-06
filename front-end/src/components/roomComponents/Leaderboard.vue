@@ -23,7 +23,7 @@
   
   // Sort entries by points in descending order
   const sortedEntries = computed(() => {
-    return [...props.players].sort((a, b) => b.points - a.points);
+    return [...props.players].sort((a, b) => b.correctAnswers - a.correctAnswers);
   });
   </script>
   

@@ -10,11 +10,15 @@
       <h2 class="logo header-logo">Trivia Duel</h2>
     </header>
 
-    <!-- Conditionally render components based on game state -->
-    <Loading v-if="!isConnected || isWaiting || isEndGame" :text="loadingText"/>
-    <RoomSetup v-if="isConnected && !isWaiting && !isGameStarted && !showLeaderboard" :onStart="startGame" :players="playerList"/>
-    <TriviaQuestion v-if="isConnected && isGameStarted && !isWaiting && !showLeaderboard" :question="currentQuestion" :onAnswer="submitAnswer" />
-    <Leaderboard v-if="showLeaderboard" :players="playerList" />
+    <div class="game-div">
+      <div v-if="!showLeaderboard || isEndGame" class="loading-container">
+        <Loading v-if="!isConnected || isWaiting || isEndGame" :text="loadingText"/>
+        <button v-if="isEndGame" class="end-button" @click="leaveRoom">Leave Room</button>
+      </div>
+      <RoomSetup v-if="isConnected && !isWaiting && !isGameStarted && !showLeaderboard" :onStart="startGame" :players="playerList"/>
+      <TriviaQuestion v-if="isConnected && isGameStarted && !isWaiting && !showLeaderboard" :question="currentQuestion" :onAnswer="submitAnswer" />
+      <Leaderboard v-if="showLeaderboard" :players="playerList" />
+    </div>
   </div>
 </template>
 
@@ -63,6 +67,10 @@ import Loading from './Loading.vue';
         webSocket.send(JSON.stringify({action: "submitAnswer", answer: answer}));
       }
 
+      const leaveRoom = () => {
+        router.replace({path: '/'});
+      }
+
       const decodeString = (string) => {
         const txt = document.createElement('textarea');
         txt.innerHTML = string;
@@ -89,13 +97,18 @@ import Loading from './Loading.vue';
           
           const messageData = JSON.parse(event.data);
 
+          if(messageData.questionData) {
+            messageData.questionData.question = decodeString(messageData.questionData.question);
+            messageData.questionData.answers = messageData.questionData.answers.map((answer) => decodeString(answer));
+          }
+
           switch(messageData.messageType) {
             case "RoomStatus":
               loadingText.value = "Loading Room...";
               isConnected.value = true;
               playerList.value = messageData.users;
               roomCode.value = messageData.roomCode;
-              currentQuestion.value.text = decodeString(messageData.questionData.question);
+              currentQuestion.value.text = messageData.questionData.question;
               currentQuestion.value.answers = messageData.questionData.answers;
               break;
             
@@ -104,7 +117,7 @@ import Loading from './Loading.vue';
               showLeaderboard.value = false;
               isGameStarted.value = true;
               playerList.value = messageData.users;
-              currentQuestion.value.text = decodeString(messageData.questionData.question);
+              currentQuestion.value.text = messageData.questionData.question;
               currentQuestion.value.answers = messageData.questionData.answers;
               break;
 
@@ -163,7 +176,8 @@ import Loading from './Loading.vue';
         loadingText,
         isConnected,
         isWaiting,
-        isEndGame
+        isEndGame,
+        leaveRoom
       }
     }
   }
@@ -175,6 +189,27 @@ import Loading from './Loading.vue';
     height: 100%;
     display: flex;
     flex-direction: column;
+  }
+
+  .game-div {
+    height:100%;
+    display: flex;
+    flex-direction: column;
+    place-content: space-around;
+  }
+
+  .loading-container {
+    display: flex;
+    flex-direction: column;
+    place-content: center;
+  }
+
+  .end-button {
+    margin: auto;
+    width: 15%;
+    height: 100%;
+    font-size: 2rem;
+    background-color: var(--trivia-red);
   }
 
   header {

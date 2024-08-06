@@ -25,13 +25,15 @@
   <style scoped>
   .player-list {
     padding: 1rem;
-    background-color: var(--color-background-mute);
-    border: 1px solid var(--color-background);
-    border-radius: 4px;
+    background-color: var(--color-background);
+    border-radius: 6px;
+    color: var(--trivia-cyan);
   }
   
   .player-list h2 {
+    text-align: center;
     margin-bottom: 0.5rem;
+    border-bottom: 1px solid var(--trivia-red);
   }
   
   .player-list ul {
@@ -40,8 +42,8 @@
   }
   
   .player-list li {
-    padding: 0.5rem 0;
-    border: 1px solid var(--color-background);
+    padding: 0.5rem;
+    text-align: center;
   }
   
   .player-list li:last-child {

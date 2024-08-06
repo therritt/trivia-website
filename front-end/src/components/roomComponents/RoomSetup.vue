@@ -1,7 +1,11 @@
 <template>
   <div class="room-setup">
-    <button @click="startGame">Start Game</button>
-    <PlayerList :players="players" />
+    <div class="button-container">
+      <button @click="startGame">Start Game</button>
+    </div>
+    <div class="list-container">
+      <PlayerList :players="players" />
+    </div>
   </div>
 </template>
 
@@ -37,9 +41,28 @@ import PlayerList from './PlayerList.vue';
 
 <style scoped>
   .room-setup {
+    height: 100%;
     display: flex;
     flex-direction: column;
     align-items: center;
-    margin-top: 2rem;
+    justify-content: space-around;
+  }
+
+  .button-container {
+    flex: 1;
+    display: flex;
+    place-content: center;
+  }
+
+  .list-container {
+    flex: 2;
+  }
+
+  button {
+    margin: auto;
+    width: 100%;
+    height: 40%;
+    font-size: 2rem;
+    background-color: var(--trivia-red);
   }
 </style>

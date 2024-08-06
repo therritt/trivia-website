@@ -4,7 +4,8 @@ const redis = require('/opt/node_modules/redis');
 const client = redis.createClient({
   socket: {
     host: process.env.REDIS_ENDPOINT,
-    port: process.env.REDIS_PORT
+    port: process.env.REDIS_PORT,
+    tls: true
   }
 });
 

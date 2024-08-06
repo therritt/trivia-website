@@ -62,6 +62,7 @@
     display: flex;
     flex-wrap: wrap;
     place-content: space-around;
+    width: 100%;
   }
 
   .answers-container button {
@@ -69,7 +70,6 @@
     margin: 0.5rem;
     text-overflow: clip;
     font-size: 3vw;
-
     min-height: 40%;
   }
 

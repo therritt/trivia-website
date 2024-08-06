@@ -5,7 +5,8 @@ const crypto = require('crypto');
 const client = redis.createClient({
     socket: {
         host: process.env.REDIS_ENDPOINT,
-        port: process.env.REDIS_PORT
+        port: process.env.REDIS_PORT,
+        tls: true
     }
 });
 

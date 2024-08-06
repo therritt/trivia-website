@@ -149,14 +149,20 @@ Resources:
 
   # ElastiCache Redis Cluster (one node)
   RedisCluster:
-    Type: AWS::ElastiCache::CacheCluster
+    Type: AWS::ElastiCache::ReplicationGroup
     Properties:
-      CacheNodeType: cache.t4g.micro
+      AutomaticFailoverEnabled: false
+      ReplicationGroupId: 'trivia-redis-group'
+      ReplicationGroupDescription: 'Trivia Duel single node group'
       Engine: redis
-      NumCacheNodes: 1
+      CacheNodeType: cache.t4g.micro
+      NumCacheClusters: 1
       CacheSubnetGroupName: !Ref RedisSubnetGroup
-      VpcSecurityGroupIds:
+      SecurityGroupIds:
         - !Ref RedisAccessSecurityGroup
+      AtRestEncryptionEnabled: true
+      TransitEncryptionEnabled: true
+      KmsKeyId: !Ref TriviaKMSKey
 
   # Cache Subnet Group
   RedisSubnetGroup:
@@ -551,7 +557,8 @@ Resources:
           const client = redis.createClient({
             socket: {
               host: process.env.REDIS_ENDPOINT,
-              port: process.env.REDIS_PORT
+              port: process.env.REDIS_PORT,
+              tls: true
             }
           });
 
@@ -609,8 +616,8 @@ Resources:
         - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:redisLayer:1
       Environment:
         Variables:
-          REDIS_ENDPOINT: !Sub "${RedisCluster.RedisEndpoint.Address}"
-          REDIS_PORT: !Sub "${RedisCluster.RedisEndpoint.Port}"
+          REDIS_ENDPOINT: !Sub "${RedisCluster.PrimaryEndPoint.Address}"
+          REDIS_PORT: !Sub "${RedisCluster.PrimaryEndPoint.Port}"
       VpcConfig:
         SubnetIds:
           - !Ref LambdaSubnet
@@ -632,7 +639,8 @@ Resources:
           const client = redis.createClient({
               socket: {
                   host: process.env.REDIS_ENDPOINT,
-                  port: process.env.REDIS_PORT
+                  port: process.env.REDIS_PORT,
+                  tls: true
               }
           });
 
@@ -692,8 +700,8 @@ Resources:
         - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:redisLayer:1
       Environment:
         Variables:
-          REDIS_ENDPOINT: !Sub "${RedisCluster.RedisEndpoint.Address}"
-          REDIS_PORT: !Sub "${RedisCluster.RedisEndpoint.Port}"
+          REDIS_ENDPOINT: !Sub "${RedisCluster.PrimaryEndPoint.Address}"
+          REDIS_PORT: !Sub "${RedisCluster.PrimaryEndPoint.Port}"
       VpcConfig:
         SubnetIds:
           - !Ref LambdaSubnet
@@ -714,7 +722,8 @@ Resources:
           const client = redis.createClient({
             socket: {
               host: process.env.REDIS_ENDPOINT,
-              port: process.env.REDIS_PORT
+              port: process.env.REDIS_PORT,
+              tls: true
             }
           });
           let isRedisConnected = false;
@@ -768,8 +777,8 @@ Resources:
         - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:redisLayer:1
       Environment:
         Variables:
-          REDIS_ENDPOINT: !Sub "${RedisCluster.RedisEndpoint.Address}"
-          REDIS_PORT: !Sub "${RedisCluster.RedisEndpoint.Port}"
+          REDIS_ENDPOINT: !Sub "${RedisCluster.PrimaryEndPoint.Address}"
+          REDIS_PORT: !Sub "${RedisCluster.PrimaryEndPoint.Port}"
       VpcConfig:
         SubnetIds:
           - !Ref LambdaSubnet
@@ -789,7 +798,8 @@ Resources:
           const redisClient = redis.createClient({
               socket: {
                   host: process.env.REDIS_ENDPOINT,
-                  port: process.env.REDIS_PORT
+                  port: process.env.REDIS_PORT,
+                  tls: true
               }
           });
 
@@ -867,8 +877,8 @@ Resources:
         - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:redisLayer:1
       Environment:
         Variables:
-          REDIS_ENDPOINT: !Sub "${RedisCluster.RedisEndpoint.Address}"
-          REDIS_PORT: !Sub "${RedisCluster.RedisEndpoint.Port}"
+          REDIS_ENDPOINT: !Sub "${RedisCluster.PrimaryEndPoint.Address}"
+          REDIS_PORT: !Sub "${RedisCluster.PrimaryEndPoint.Port}"
       VpcConfig:
         SubnetIds:
           - !Ref LambdaSubnet
@@ -973,7 +983,8 @@ Resources:
           const client = redis.createClient({
             socket: {
               host: process.env.REDIS_ENDPOINT,
-              port: process.env.REDIS_PORT
+              port: process.env.REDIS_PORT,
+              tls: true
             }
           });
 
@@ -1020,8 +1031,8 @@ Resources:
         - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:redisLayer:1
       Environment:
         Variables:
-          REDIS_ENDPOINT: !Sub "${RedisCluster.RedisEndpoint.Address}"
-          REDIS_PORT: !Sub "${RedisCluster.RedisEndpoint.Port}"
+          REDIS_ENDPOINT: !Sub "${RedisCluster.PrimaryEndPoint.Address}"
+          REDIS_PORT: !Sub "${RedisCluster.PrimaryEndPoint.Port}"
       VpcConfig:
         SubnetIds:
           - !Ref LambdaSubnet
@@ -1076,7 +1087,8 @@ Resources:
           const client = redis.createClient({
             socket: {
               host: process.env.REDIS_ENDPOINT,
-              port: process.env.REDIS_PORT
+              port: process.env.REDIS_PORT,
+              tls: true
             }
           });
 
@@ -1125,8 +1137,8 @@ Resources:
         - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:redisLayer:1
       Environment:
         Variables:
-          REDIS_ENDPOINT: !Sub "${RedisCluster.RedisEndpoint.Address}"
-          REDIS_PORT: !Sub "${RedisCluster.RedisEndpoint.Port}"
+          REDIS_ENDPOINT: !Sub "${RedisCluster.PrimaryEndPoint.Address}"
+          REDIS_PORT: !Sub "${RedisCluster.PrimaryEndPoint.Port}"
       VpcConfig:
         SubnetIds:
           - !Ref LambdaSubnet

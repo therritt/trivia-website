@@ -1,35 +1,43 @@
-# 4145-trivia-website
+# Trivia Website
 
-This template should help get you started developing with Vue 3 in Vite.
+*Disclaimer: This website is not currently deployed, and may require paid features of Amazon Web Services.*
 
-## Recommended IDE Setup
+- This is a trivia website made using Vue 3, Vite, NodeJS and AWS.
+- A player is able to create or join trivia rooms.
+- In the rooms, a trivia game can be started.
+- The players have a limited time to guess the correct trivia question from a group of 2 to 4 answers.
 
-[VSCode](https://code.visualstudio.com/) + [Volar](https://marketplace.visualstudio.com/items?itemName=Vue.volar) (and disable Vetur).
+## AWS
+- The infrastructure to run the game is contained within the CloudFormation YML document, ready for full deployment.
+- The infrastructure includes:
+    - Step functions
+    - Lambdas
+    - S3 bucket
+    - VPC configurations
+    - Redis Elasticache
+    - API Gateway
+        - HTTPS
+        - Websockets
+    - Secret Management
+- Infrastructure graph:
+    - ![](assets/TriviaDuel.png)
 
-## Customize configuration
+## Front End
+- The front end is created using Vue 3 and Vite (for building).
+- There is a .env required that uses a VITE_API_URL value that should be the websocket URL for the frontend to hit to engage with the AWS infrastructure.
 
-See [Vite Configuration Reference](https://vitejs.dev/config/).
+## Examples
+- Landing page:
+    - ![](assets/landing_page.png)
 
-## Project Setup
+- Create or join a room:
+    - ![](assets/Create_or_join.png)
 
-```sh
-npm install
-```
+- Waiting in a room:
+    - ![](assets/room.png)
 
-### Compile and Hot-Reload for Development
+- Question to answer:
+    - ![](assets/example_question.png)
 
-```sh
-npm run dev
-```
-
-### Compile and Minify for Production
-
-```sh
-npm run build
-```
-
-### Lint with [ESLint](https://eslint.org/)
-
-```sh
-npm run lint
-```
+- Leaderboard:
+    - ![](assets/leaderboard.png)
